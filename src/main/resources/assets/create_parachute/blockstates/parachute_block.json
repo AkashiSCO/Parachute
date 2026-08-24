@@ -1,0 +1,16 @@
+{
+  "variants": {
+    "deployed=false,facing=up":    { "model": "create_parachute:block/parachute_closed" },
+    "deployed=false,facing=down":  { "model": "create_parachute:block/parachute_closed", "x": 180 },
+    "deployed=false,facing=north": { "model": "create_parachute:block/parachute_closed", "x": 90 },
+    "deployed=false,facing=south": { "model": "create_parachute:block/parachute_closed", "x": 270 },
+    "deployed=false,facing=west":  { "model": "create_parachute:block/parachute_closed", "x": 90, "y": 270 },
+    "deployed=false,facing=east":  { "model": "create_parachute:block/parachute_closed", "x": 90, "y": 90 },
+    "deployed=true,facing=up":    { "model": "create_parachute:block/parachute_deployed" },
+    "deployed=true,facing=down":  { "model": "create_parachute:block/parachute_deployed", "x": 180 },
+    "deployed=true,facing=north": { "model": "create_parachute:block/parachute_deployed", "x": 90 },
+    "deployed=true,facing=south": { "model": "create_parachute:block/parachute_deployed", "x": 270 },
+    "deployed=true,facing=west":  { "model": "create_parachute:block/parachute_deployed", "x": 90, "y": 270 },
+    "deployed=true,facing=east":  { "model": "create_parachute:block/parachute_deployed", "x": 90, "y": 90 }
+  }
+}

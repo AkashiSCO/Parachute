@@ -1,0 +1,10 @@
+{
+  "variants": {
+    "facing=up":    { "model": "create_parachute:block/parachute_closed" },
+    "facing=down":  { "model": "create_parachute:block/parachute_closed", "x": 180 },
+    "facing=north": { "model": "create_parachute:block/parachute_closed", "x": 90 },
+    "facing=south": { "model": "create_parachute:block/parachute_closed", "x": 270 },
+    "facing=west":  { "model": "create_parachute:block/parachute_closed", "x": 90, "y": 270 },
+    "facing=east":  { "model": "create_parachute:block/parachute_closed", "x": 90, "y": 90 }
+  }
+}

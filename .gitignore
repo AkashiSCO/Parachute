@@ -1,0 +1,67 @@
+### Gradle ###
+.gradle
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/**/out/
+
+.run/
+
+### Eclipse ###
+.apt_generated
+.classpath
+.eclipse/
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/**/bin/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+
+### Minecraft Modding ###
+run/
+!**/src/**/run/
+**/src/generated/**/.cache/
+repo/
+!**/src/**/repo/
+
+### 本地依赖与资源（不提交） ###
+libs/
+# 根目录的杂散资源副本；带 / 锚定，避免误伤 src/.../client/assets 下的 Java 源码
+/assets/
+
+### 开发调试产物（不提交到 GitHub） ###
+backup/
+bin/
+logs/
+*.py
+*.ps1
+*.bak
+*.iws
+*.ipr
+*.iml
+*.png
+# 模组的材质文件在 src/main/resources 里，必须提交（上面的 *.png 只忽略根目录/backup 的调试图片）
+!src/main/resources/**/*.png
+model_body.txt
+compile_err.txt
+err.txt
+output.txt
+output2.txt
+temp_anim.java
+TEMPLATE_LICENSE.txt
+Create-Parachute-CurseForge.md
