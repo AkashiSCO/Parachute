@@ -1,6 +1,6 @@
 package com.create.parachute.network;
 
-import com.create.parachute.ExampleMod;
+import com.create.parachute.ParachuteMod;
 import com.create.parachute.parachute.ParachuteBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -17,7 +17,7 @@ public record ClientboundParachuteVelocityPayload(
 ) implements CustomPacketPayload {
 
     public static final Type<ClientboundParachuteVelocityPayload> TYPE =
-            new Type<>(ResourceLocation.fromNamespaceAndPath(ExampleMod.MOD_ID, "parachute_velocity"));
+            new Type<>(ResourceLocation.fromNamespaceAndPath(ParachuteMod.MOD_ID, "parachute_velocity"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, ClientboundParachuteVelocityPayload> STREAM_CODEC =
             StreamCodec.composite(

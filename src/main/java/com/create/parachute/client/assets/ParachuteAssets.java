@@ -1,6 +1,6 @@
 package com.create.parachute.client.assets;
 
-import com.create.parachute.ExampleMod;
+import com.create.parachute.ParachuteMod;
 import com.create.parachute.data.ParachuteManager;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -125,15 +125,15 @@ public final class ParachuteAssets {
                     BakedParachute baked = loadOne(dir, id);
                     if (baked != null) {
                         cache.put(id, baked);
-                        ExampleMod.LOGGER.info("Hot-loaded parachute '{}'", id);
+                        ParachuteMod.LOGGER.info("Hot-loaded parachute '{}'", id);
                     } else {
                         cache.remove(id);
-                        ExampleMod.LOGGER.warn("Parachute '{}' failed to load; removed", id);
+                        ParachuteMod.LOGGER.warn("Parachute '{}' failed to load; removed", id);
                     }
                 }
             }
         } catch (IOException e) {
-            ExampleMod.LOGGER.warn("Failed to scan parachute folder: {}", e.toString());
+            ParachuteMod.LOGGER.warn("Failed to scan parachute folder: {}", e.toString());
         }
 
         // 移除已删除的伞
@@ -141,14 +141,14 @@ public final class ParachuteAssets {
             if (!found.contains(id)) {
                 cache.remove(id);
                 signatures.remove(id);
-                ExampleMod.LOGGER.info("Removed parachute '{}' (folder gone)", id);
+                ParachuteMod.LOGGER.info("Removed parachute '{}' (folder gone)", id);
             }
         }
         idList = new ArrayList<>(found);
         idList.sort(String::compareTo);
         if (!loggedInitial) {
             loggedInitial = true;
-            ExampleMod.LOGGER.info("Loaded {} parachutes from {}", idList.size(), root);
+            ParachuteMod.LOGGER.info("Loaded {} parachutes from {}", idList.size(), root);
         }
     }
 
@@ -229,7 +229,7 @@ public final class ParachuteAssets {
 
             return new BakedParachute(id, modelPart, anim, texture, whiteTexture, lengthSeconds, bedrock);
         } catch (Exception e) {
-            ExampleMod.LOGGER.warn("Failed to load parachute '{}': {}", id, e.toString());
+            ParachuteMod.LOGGER.warn("Failed to load parachute '{}': {}", id, e.toString());
             return null;
         }
     }
@@ -245,11 +245,11 @@ public final class ParachuteAssets {
             if (image == null) return null;
 
             ResourceLocation location = ResourceLocation.fromNamespaceAndPath(
-                    ExampleMod.MOD_ID, "parachute/" + id + "/original");
+                    ParachuteMod.MOD_ID, "parachute/" + id + "/original");
             registerTexture(location, image);
             return location;
         } catch (Exception e) {
-            ExampleMod.LOGGER.warn("Failed to load texture for parachute '{}': {}", id, e.toString());
+            ParachuteMod.LOGGER.warn("Failed to load texture for parachute '{}': {}", id, e.toString());
             return null;
         }
     }
@@ -266,11 +266,11 @@ public final class ParachuteAssets {
             NativeImage white = toWhiteBase(image);
 
             ResourceLocation location = ResourceLocation.fromNamespaceAndPath(
-                    ExampleMod.MOD_ID, "parachute/" + id + "/white");
+                    ParachuteMod.MOD_ID, "parachute/" + id + "/white");
             registerTexture(location, white);
             return location;
         } catch (Exception e) {
-            ExampleMod.LOGGER.warn("Failed to generate white texture for parachute '{}': {}", id, e.toString());
+            ParachuteMod.LOGGER.warn("Failed to generate white texture for parachute '{}': {}", id, e.toString());
             return null;
         }
     }

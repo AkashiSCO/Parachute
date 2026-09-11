@@ -41,7 +41,7 @@ public final class BbAnimationParser {
             JsonObject root = JsonParser.parseReader(reader).getAsJsonObject();
             return parse(root);
         } catch (Exception e) {
-            com.create.parachute.ExampleMod.LOGGER.warn("Failed to parse bbmodel animation: {}", e.toString());
+            com.create.parachute.ParachuteMod.LOGGER.warn("Failed to parse bbmodel animation: {}", e.toString());
             return null;
         }
     }

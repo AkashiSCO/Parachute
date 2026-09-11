@@ -1,6 +1,6 @@
 package com.create.parachute.network;
 
-import com.create.parachute.ExampleMod;
+import com.create.parachute.ParachuteMod;
 import com.create.parachute.parachute.ParachuteBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -28,7 +28,7 @@ public record SyncParachuteTransformPayload(BlockPos pos, int mode, float x, flo
     public static final int MODE_OFFSET = 2;
 
     public static final Type<SyncParachuteTransformPayload> TYPE =
-            new Type<>(ResourceLocation.fromNamespaceAndPath(ExampleMod.MOD_ID, "sync_parachute_transform"));
+            new Type<>(ResourceLocation.fromNamespaceAndPath(ParachuteMod.MOD_ID, "sync_parachute_transform"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, SyncParachuteTransformPayload> STREAM_CODEC =
             StreamCodec.composite(

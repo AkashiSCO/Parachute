@@ -1,6 +1,6 @@
 package com.create.parachute.network;
 
-import com.create.parachute.ExampleMod;
+import com.create.parachute.ParachuteMod;
 import com.create.parachute.data.ParachuteManager;
 import com.create.parachute.parachute.ParachuteBlockEntity;
 import net.minecraft.core.BlockPos;
@@ -27,7 +27,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 public record SyncParachuteSelectionPayload(BlockPos pos, String name) implements CustomPacketPayload {
 
     public static final Type<SyncParachuteSelectionPayload> TYPE =
-            new Type<>(ResourceLocation.fromNamespaceAndPath(ExampleMod.MOD_ID, "sync_parachute_selection"));
+            new Type<>(ResourceLocation.fromNamespaceAndPath(ParachuteMod.MOD_ID, "sync_parachute_selection"));
 
     public static final StreamCodec<FriendlyByteBuf, SyncParachuteSelectionPayload> STREAM_CODEC =
             StreamCodec.ofMember(SyncParachuteSelectionPayload::write, SyncParachuteSelectionPayload::new);

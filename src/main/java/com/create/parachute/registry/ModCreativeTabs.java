@@ -1,6 +1,6 @@
 package com.create.parachute.registry;
 
-import com.create.parachute.ExampleMod;
+import com.create.parachute.ParachuteMod;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.CreativeModeTab;
@@ -9,7 +9,7 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 
 public final class ModCreativeTabs {
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS =
-            DeferredRegister.create(Registries.CREATIVE_MODE_TAB, ExampleMod.MOD_ID);
+            DeferredRegister.create(Registries.CREATIVE_MODE_TAB, ParachuteMod.MOD_ID);
 
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> PARACHUTE_TAB =
             CREATIVE_MODE_TABS.register("parachute", () -> CreativeModeTab.builder()

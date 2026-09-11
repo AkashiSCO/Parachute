@@ -1,6 +1,6 @@
 package com.create.parachute.network;
 
-import com.create.parachute.ExampleMod;
+import com.create.parachute.ParachuteMod;
 import com.create.parachute.parachute.ParachuteBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
@@ -22,7 +22,7 @@ public record SyncParachuteConfigPayload(
 ) implements CustomPacketPayload {
 
     public static final Type<SyncParachuteConfigPayload> TYPE =
-            new Type<>(ResourceLocation.fromNamespaceAndPath(ExampleMod.MOD_ID, "sync_parachute_config"));
+            new Type<>(ResourceLocation.fromNamespaceAndPath(ParachuteMod.MOD_ID, "sync_parachute_config"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, SyncParachuteConfigPayload> STREAM_CODEC = StreamCodec.composite(
             ByteBufCodecs.fromCodec(BlockPos.CODEC), SyncParachuteConfigPayload::pos,

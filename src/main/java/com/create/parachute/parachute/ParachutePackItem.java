@@ -1,5 +1,6 @@
 package com.create.parachute.parachute;
 
+import com.create.parachute.client.ClientHooks;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -38,10 +39,10 @@ public class ParachutePackItem extends BlockItem {
 
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
-        // 右键伞包 → 先打开控制器 GUI（目标为 null = 写入手持伞包物品 NBT）
+        // 右键伞包 → 先打开控制器 GUI（目标为 null = 写入手持伞包物品 NBT）。
+        // 本类在专用服务端也会被加载，客户端界面必须经 ClientHooks 间接调用，见该类的说明。
         if (level.isClientSide) {
-            net.minecraft.client.Minecraft.getInstance().setScreen(
-                    new com.create.parachute.client.ParachuteScreen(null));
+            ClientHooks.openControllerScreen(null);
         }
         return InteractionResultHolder.success(player.getItemInHand(hand));
     }

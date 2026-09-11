@@ -1,7 +1,7 @@
 package com.create.parachute.parachute;
 
 import com.create.parachute.ParachuteConfig;
-import com.create.parachute.client.assets.ParachuteAssets;
+import com.create.parachute.client.ClientHooks;
 import com.create.parachute.data.ParachuteManager;
 import com.create.parachute.network.ClientboundParachuteVelocityPayload;
 import com.create.parachute.registry.ModBlockEntities;
@@ -12,15 +12,11 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
-import net.minecraft.world.entity.player.Inventory;
-import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -77,7 +73,7 @@ import org.joml.Vector3d;
  * @see ClientboundParachuteVelocityPayload 方向同步网络包
  * @see com.create.parachute.client.ParachuteRenderer 降落伞方块实体渲染器
  */
-public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubLevelActor, net.minecraft.world.MenuProvider {
+public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubLevelActor {
 
     // ============================================================
     // 数值边界常量
@@ -126,12 +122,8 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     // 方向矢量 — 世界坐标系（服务端物理计算产出）
     // ============================================================
 
-    /** 当前平滑后的世界空间速度反方向（单位向量），每 tick 向 targetVel lerp 靠近 */
+    /** 当前平滑后的速度反方向（单位向量），每 tick 向目标方向 lerp 靠近 */
     private volatile double velX, velY, velZ;
-    /** 上一帧的世界方向，用于 GPU 帧间插值 */
-    private double prevVelX, prevVelY = 1.0D, prevVelZ;
-    /** 世界空间目标方向 — 服务端物理帧写入，客户端通过同步包接收 */
-    private double targetVelX, targetVelY = 1.0D, targetVelZ;
 
     // ============================================================
     // 方向矢量 — 体坐标系（客户端渲染使用）
@@ -307,11 +299,6 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     private void tickClientDirection() {
         if (this.level == null || !this.level.isClientSide) return;
 
-        // 备份当前值用于帧间插值（getRenderVelX/Y/Z 在渲染器中调用）
-        this.prevVelX = this.velX;
-        this.prevVelY = this.velY;
-        this.prevVelZ = this.velZ;
-
         // 确定目标方向：
         //   已部署 → 服务端发来的体空间方向（已含物理体姿态转换）
         //   未部署 → 方块放置面的法线方向
@@ -343,7 +330,7 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         // bedrock 模型（X 轴语义相反）不加，否则左右镜像。
         Quaternionf target = new Quaternionf().rotateTo(0, -1, 0,
                 (float) this.velX, (float) this.velY, (float) this.velZ);
-        if (!ParachuteAssets.isBedrock(getParachuteName())) {
+        if (!ClientHooks.isBedrockModel(getParachuteName())) {
             target.mul(new Quaternionf().rotateY((float) Math.toRadians(-90)));
         }
 
@@ -564,9 +551,6 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
             this.physicsTickCount = 0;
         } else {
             this.velX = this.velY = this.velZ = 0;
-            this.targetVelX = 0.0D;
-            this.targetVelY = 1.0D;
-            this.targetVelZ = 0.0D;
             this.localTargetVelX = 0.0D;
             this.localTargetVelY = 1.0D;
             this.localTargetVelZ = 0.0D;
@@ -684,20 +668,6 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     }
 
     // ============================================================
-    // GUI（驾驶舱菜单）
-    // ============================================================
-
-    @Override
-    public Component getDisplayName() {
-        return Component.translatable("screen.create_parachute.parachute");
-    }
-
-    @Override
-    public AbstractContainerMenu createMenu(int containerId, Inventory inventory, Player player) {
-        return new ParachuteMenu(containerId, inventory, this);
-    }
-
-    // ============================================================
     // 持久化和同步
     // ============================================================
 
@@ -786,7 +756,7 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
 
     /**
      * 客户端接收 BE 同步标签。
-     * <p>世界方向存入 targetVel 用于后续 lerp 平滑，体空间方向直接用于渲染。
+     * <p>体空间方向直接用于渲染和后续 lerp 平滑（存入 localTargetVel）。
      * 兼容旧版同步标签中缺少 LocalVelX 字段的情况。</p>
      */
     @Override
@@ -802,9 +772,6 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
                 this.velX = this.localTargetVelX;
                 this.velY = this.localTargetVelY;
                 this.velZ = this.localTargetVelZ;
-                this.prevVelX = this.velX;
-                this.prevVelY = this.velY;
-                this.prevVelZ = this.velZ;
             }
         } else {
             this.velX = tag.getDouble("VelX");
@@ -832,13 +799,6 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     // 渲染器用 getter（GPU 帧间插值）
     // ============================================================
 
-    /** @return 当前世界空间速度方向 X */
-    public double getVelX() { return this.velX; }
-    /** @return 当前世界空间速度方向 Y */
-    public double getVelY() { return this.velY; }
-    /** @return 当前世界空间速度方向 Z */
-    public double getVelZ() { return this.velZ; }
-
     /**
      * 伞面当前姿态四元数（帧间插值）。
      * <p>在 BER 渲染时通过 partialTick 插值 prevRenderQuat 和 renderQuat，
@@ -861,13 +821,6 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         return Mth.lerp(partialTick, this.prevWobblePhase, this.wobblePhase);
     }
 
-    /** @return 帧间插值后的当前速度方向 X */
-    public double getRenderVelX(float partialTick) { return Mth.lerp(partialTick, this.prevVelX, this.velX); }
-    /** @return 帧间插值后的当前速度方向 Y */
-    public double getRenderVelY(float partialTick) { return Mth.lerp(partialTick, this.prevVelY, this.velY); }
-    /** @return 帧间插值后的当前速度方向 Z */
-    public double getRenderVelZ(float partialTick) { return Mth.lerp(partialTick, this.prevVelZ, this.velZ); }
-
     /**
      * 开伞动画进度的帧间插值 [0, 1]。
      * <p>0 = 完全收伞，1 = 完全开伞。渲染器用此值控制伞面模型骨骼动画。</p>
@@ -880,16 +833,13 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
      * 速度同步包到达客户端时的回调。
      * <p>参数 vx/vy/vz 是体坐标系方向（服务端已从世界方向转换），
      * 直接存入 localTargetVel 供渲染使用。</p>
-     * <p>首次调用时同时初始化 prev 和 current 值，避免从 (0,0,0) 突变。</p>
+     * <p>首次调用时同时初始化 vel，避免从 (0,0,0) 突变。</p>
      */
     public void setClientVel(double vx, double vy, double vz) {
         this.localTargetVelX = vx;
         this.localTargetVelY = vy;
         this.localTargetVelZ = vz;
         if (!this.clientDirectionInitialized) {
-            this.prevVelX = vx;
-            this.prevVelY = vy;
-            this.prevVelZ = vz;
             this.velX = vx;
             this.velY = vy;
             this.velZ = vz;
@@ -905,7 +855,8 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         Direction facing = getFacing();
         Quaternionf q = new Quaternionf().rotateTo(0, -1, 0,
                 facing.getStepX(), facing.getStepY(), facing.getStepZ());
-        if (!ParachuteAssets.isBedrock(getParachuteName())) {
+        // bedrock 判断需要客户端的模型数据，经 ClientHooks 间接调用（本类服务端也会加载）
+        if (!ClientHooks.isBedrockModel(getParachuteName())) {
             q.mul(new Quaternionf().rotateY((float) Math.toRadians(-90)));
         }
         return q;

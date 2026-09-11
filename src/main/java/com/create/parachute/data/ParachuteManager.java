@@ -4,7 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.create.parachute.ExampleMod;
+import com.create.parachute.ParachuteMod;
 import net.neoforged.fml.loading.FMLPaths;
 import org.jetbrains.annotations.Nullable;
 
@@ -15,16 +15,20 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 
 /**
  * 伞包文件夹管理器。
  *
- * <p>模组成功加载时在游戏根目录创建 {@code parachute/}，每个子文件夹是一把伞，
+ * <p>客户端在游戏根目录创建 {@code parachute/}，每个子文件夹是一把伞，
  * 内含 {@code <伞名>.bbmodel}（模型+动画+内嵌贴图）和可选的同目录 {@code .png} 贴图。
- * 首次加载时自动把内置的 5 把伞（大伞/小伞系列）从模组资源导出到该文件夹。</p>
+ * 客户端首次加载时自动把内置的 5 把伞（大伞/小伞系列）从模组资源导出到该文件夹。</p>
+ *
+ * <p><b>仅客户端使用</b>：解析模型/贴图的是 {@code client.assets.ParachuteAssets}，
+ * 专用服务端从不读取该文件夹（伞名只是方块实体 NBT 里的一个字符串，
+ * 由各客户端在本地解析），所以服务端不会创建也不会导出它——
+ * 往服务端的 {@code parachute/} 里放模型同样不会分发给玩家。</p>
  */
 public final class ParachuteManager {
 
@@ -36,7 +40,7 @@ public final class ParachuteManager {
     public static final List<String> BUILTIN_IDS = List.of(
             "parachute", "parachute1", "mushroom", "bigparachute", "bigparachute2");
 
-    private static final String ASSET_MODEL_DIR = "assets/" + ExampleMod.MOD_ID + "/models/entity";
+    private static final String ASSET_MODEL_DIR = "assets/" + ParachuteMod.MOD_ID + "/models/entity";
 
     private ParachuteManager() {
     }
@@ -52,7 +56,7 @@ public final class ParachuteManager {
     }
 
     /**
-     * 模组加载时调用：确保 parachute/ 文件夹存在。
+     * 确保 parachute/ 文件夹存在（<b>仅客户端调用</b>，见类注释）。
      * 首次加载（文件夹原本不存在）导出全部内置伞；
      * 后续加载只确保蘑菇伞存在（其他伞玩家可自行删除，不会重新导出）。
      */
@@ -78,9 +82,9 @@ public final class ParachuteManager {
             }
             Files.createDirectories(dir);
             exportBuiltin(id, dir);
-            ExampleMod.LOGGER.info("Exported built-in parachute '{}' to {}", id, dir);
+            ParachuteMod.LOGGER.info("Exported built-in parachute '{}' to {}", id, dir);
         } catch (Exception e) {
-            ExampleMod.LOGGER.warn("Failed to export built-in parachute '{}': {}", id, e.toString());
+            ParachuteMod.LOGGER.warn("Failed to export built-in parachute '{}': {}", id, e.toString());
         }
     }
 
@@ -94,25 +98,6 @@ public final class ParachuteManager {
     }
 
     /**
-     * 扫描 parachute/ 下所有含 .bbmodel 的子文件夹，返回伞 id 列表。
-     * 客户端 GUI 用它展示可选的伞；服务端也可用（仅作展示）。
-     */
-    public static List<String> listParachuteIds() {
-        List<String> ids = new ArrayList<>();
-        Path root = rootFolder();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(root)) {
-            for (Path p : ds) {
-                if (Files.isDirectory(p) && hasBbmodel(p)) {
-                    ids.add(p.getFileName().toString());
-                }
-            }
-        } catch (IOException ignored) {
-        }
-        ids.sort(String::compareTo);
-        return ids;
-    }
-
-    /**
      * 从类路径资源导出内置伞：复制 .bbmodel 和其引用的贴图到目标目录。
      * 贴图优先取类路径资源（按 relative_path 解析），缺失时用 .bbmodel 内嵌的 base64。
      */
@@ -120,7 +105,7 @@ public final class ParachuteManager {
         String bbResource = ASSET_MODEL_DIR + "/" + id + ".bbmodel";
         String bbText = readClasspathString(bbResource);
         if (bbText == null) {
-            ExampleMod.LOGGER.warn("Built-in bbmodel '{}' missing from classpath", bbResource);
+            ParachuteMod.LOGGER.warn("Built-in bbmodel '{}' missing from classpath", bbResource);
             return;
         }
         Path bbFile = dir.resolve(id + ".bbmodel");
@@ -149,17 +134,17 @@ public final class ParachuteManager {
                 }
             }
         } catch (Exception e) {
-            ExampleMod.LOGGER.warn("Failed to export textures for built-in '{}': {}", id, e.toString());
+            ParachuteMod.LOGGER.warn("Failed to export textures for built-in '{}': {}", id, e.toString());
         }
     }
 
     /** 把 bbmodel 的相对贴图路径解析为类路径资源（assets/ 开头） */
     private static String resolveRelativeAsset(String relativePath, String fileName) {
         if (relativePath.isEmpty()) {
-            return "assets/" + ExampleMod.MOD_ID + "/textures/entity/" + fileName;
+            return "assets/" + ParachuteMod.MOD_ID + "/textures/entity/" + fileName;
         }
         // bbmodel 逻辑目录：assets/<mod>/models/entity
-        Path base = Path.of("assets", ExampleMod.MOD_ID, "models", "entity");
+        Path base = Path.of("assets", ParachuteMod.MOD_ID, "models", "entity");
         Path resolved = base.resolve(relativePath.replace('\\', '/')).normalize();
         String s = resolved.toString().replace('\\', '/');
         return s.startsWith("/") ? s.substring(1) : s;

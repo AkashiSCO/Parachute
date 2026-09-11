@@ -50,7 +50,7 @@ public final class BbModelParser {
             JsonObject root = JsonParser.parseReader(reader).getAsJsonObject();
             return parse(root);
         } catch (Exception e) {
-            com.create.parachute.ExampleMod.LOGGER.warn("Failed to parse bbmodel model: {}", e.toString());
+            com.create.parachute.ParachuteMod.LOGGER.warn("Failed to parse bbmodel model: {}", e.toString());
             return null;
         }
     }
@@ -102,7 +102,7 @@ public final class BbModelParser {
 
             return LayerDefinition.create(mesh, texW, texH);
         } catch (Exception e) {
-            com.create.parachute.ExampleMod.LOGGER.warn("Failed to build bbmodel layer: {}", e.toString());
+            com.create.parachute.ParachuteMod.LOGGER.warn("Failed to build bbmodel layer: {}", e.toString());
             return null;
         }
     }
@@ -348,7 +348,7 @@ public final class BbModelParser {
             return buildModelParts(outliner, elements, groups, animBoneNames,
                     new float[]{0.0F, 0.0F, 0.0F}, new float[]{0.0F, 0.0F, 0.0F}, true, texW, texH);
         } catch (Exception e) {
-            com.create.parachute.ExampleMod.LOGGER.warn("Failed to build bbmodel ModelPart: {}", e.toString());
+            com.create.parachute.ParachuteMod.LOGGER.warn("Failed to build bbmodel ModelPart: {}", e.toString());
             return null;
         }
     }

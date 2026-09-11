@@ -1,5 +1,6 @@
 package com.create.parachute.parachute;
 
+import com.create.parachute.client.ClientHooks;
 import com.create.parachute.registry.ModBlockEntities;
 import com.mojang.serialization.MapCodec;
 import net.minecraft.core.BlockPos;
@@ -91,10 +92,12 @@ public class ParachuteBlock extends BaseEntityBlock {
 
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hitResult) {
-        // 客户端直接打开控制器 GUI（伞选择界面）；服务端无需操作
+        // 客户端直接打开控制器 GUI（伞选择界面）；服务端无需操作。
+        // 注意：本类在专用服务端也会被加载，所以只能通过 ClientHooks 间接调用客户端界面。
+        // 直接写 Minecraft.getInstance() / new ParachuteScreen(...) 会让服务端类校验去加载
+        // net.minecraft.client.*，注册阶段就崩溃（invalid dist DEDICATED_SERVER）。
         if (level.isClientSide) {
-            net.minecraft.client.Minecraft.getInstance().setScreen(new com.create.parachute.client.ParachuteScreen(pos));
-            return InteractionResult.SUCCESS;
+            ClientHooks.openControllerScreen(pos);
         }
         return InteractionResult.SUCCESS;
     }

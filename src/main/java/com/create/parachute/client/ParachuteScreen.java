@@ -1,6 +1,6 @@
 package com.create.parachute.client;
 
-import com.create.parachute.ExampleMod;
+import com.create.parachute.ParachuteMod;
 import com.create.parachute.network.SyncParachuteConfigPayload;
 import com.create.parachute.network.SyncParachuteLockPayload;
 import com.create.parachute.network.SyncParachuteTransformPayload;
@@ -29,9 +29,9 @@ public class ParachuteScreen extends Screen {
     private static final int IMAGE_WIDTH = 228;
     private static final int IMAGE_HEIGHT = 128;
     private static final ResourceLocation BG_TEXTURE =
-            ResourceLocation.fromNamespaceAndPath(ExampleMod.MOD_ID, "textures/gui/parachute_controller_new.png");
+            ResourceLocation.fromNamespaceAndPath(ParachuteMod.MOD_ID, "textures/gui/parachute_controller_new.png");
     private static final ResourceLocation BUTTON_TEXTURE =
-            ResourceLocation.fromNamespaceAndPath(ExampleMod.MOD_ID, "textures/gui/parachute_controller_button.png");
+            ResourceLocation.fromNamespaceAndPath(ParachuteMod.MOD_ID, "textures/gui/parachute_controller_button.png");
 
     private static final int REDSTONE_BTN = 0;
     private static final int LOW_SPEED_BTN = 1;

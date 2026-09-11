@@ -1,6 +1,6 @@
 package com.create.parachute.client;
 
-import com.create.parachute.ExampleMod;
+import com.create.parachute.ParachuteMod;
 import com.create.parachute.client.assets.ParachuteAssets;
 import com.create.parachute.data.ParachuteManager;
 import com.create.parachute.network.SyncParachuteSelectionPayload;
@@ -36,9 +36,9 @@ public class ParachuteSelectionScreen extends Screen {
     private static final int IMAGE_WIDTH = 228;
     private static final int IMAGE_HEIGHT = 128;
     private static final ResourceLocation BG_TEXTURE =
-            ResourceLocation.fromNamespaceAndPath(ExampleMod.MOD_ID, "textures/gui/parachute_controller_2.png");
+            ResourceLocation.fromNamespaceAndPath(ParachuteMod.MOD_ID, "textures/gui/parachute_controller_2.png");
     private static final ResourceLocation BUTTON_TEXTURE =
-            ResourceLocation.fromNamespaceAndPath(ExampleMod.MOD_ID, "textures/gui/parachute_controller_button.png");
+            ResourceLocation.fromNamespaceAndPath(ParachuteMod.MOD_ID, "textures/gui/parachute_controller_button.png");
 
     /** 显示框图形在 button 贴图内的区域（用户标记：红框 (18,46)-(161,63)） */
     private static final int BOX_U = 18;
@@ -202,7 +202,7 @@ public class ParachuteSelectionScreen extends Screen {
                 new ProcessBuilder("xdg-open", dir.getAbsolutePath()).start();
             }
         } catch (Exception e) {
-            ExampleMod.LOGGER.warn("无法打开伞文件夹: {}", e.toString());
+            ParachuteMod.LOGGER.warn("无法打开伞文件夹: {}", e.toString());
         }
     }
 

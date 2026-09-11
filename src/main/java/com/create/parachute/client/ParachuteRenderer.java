@@ -1,7 +1,6 @@
 package com.create.parachute.client;
 
 import com.create.parachute.ParachuteConfig;
-import com.create.parachute.ExampleMod;
 import com.create.parachute.client.assets.ParachuteAssets;
 import com.create.parachute.client.assets.ParachuteAssets.BakedParachute;
 import com.create.parachute.parachute.ParachuteBlockEntity;
@@ -23,9 +22,6 @@ import org.joml.Vector3f;
 public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEntity> {
 
     private final Vector3f animationCache = new Vector3f();
-
-    /** [TEMP-DEBUG lav25] 渲染矩阵输出计数 */
-    private int debugCount = 0;
 
     public ParachuteRenderer(BlockEntityRendererProvider.Context context) {
     }
@@ -93,15 +89,6 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
         if (parachute.openAnimation() != null) {
             ParachuteAssets.applyOpenAnimation(
                     parachute.root(), parachute.openAnimation(), ratio, this.animationCache);
-        }
-        // [TEMP-DEBUG lav25] 输出模型到世界的变换矩阵，用于确定正确坐标约定
-        if (id != null && id.toLowerCase(java.util.Locale.ROOT).contains("lav25") && debugCount < 3) {
-            debugCount++;
-            org.joml.Matrix4f pm = poseStack.last().pose();
-            ExampleMod.LOGGER.info("[lav25dbg] pose m00={} m01={} m02={} m03={} | m10={} m11={} m12={} m13={} | m20={} m21={} m22={} m23={}",
-                    pm.m00(), pm.m01(), pm.m02(), pm.m03(), pm.m10(), pm.m11(), pm.m12(), pm.m13(), pm.m20(), pm.m21(), pm.m22(), pm.m23());
-            ExampleMod.LOGGER.info("[lav25dbg] renderQuat={} lockedQuat={} userRot=({},{},{}) wobbleLocked={}",
-                    be.getRenderQuat(partialTick), be.getLockedQuat(), be.getRotX(), be.getRotY(), be.getRotZ(), be.isWobbleLocked());
         }
         parachute.root().render(poseStack, vc, brightLight, packedOverlay, color);
         poseStack.popPose();
