@@ -2,6 +2,8 @@ package com.create.parachute;
 
 import com.create.parachute.data.ParachuteManager;
 import com.create.parachute.network.ClientboundParachuteVelocityPayload;
+import com.create.parachute.network.ParachuteFileChunkPayload;
+import com.create.parachute.network.ParachuteUploadRequestPayload;
 import com.create.parachute.network.SyncParachuteConfigPayload;
 import com.create.parachute.network.SyncParachuteLockPayload;
 import com.create.parachute.network.SyncParachuteSelectionPayload;
@@ -13,7 +15,6 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
-import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import org.apache.logging.log4j.LogManager;
@@ -28,13 +29,10 @@ public class ParachuteMod {
         // 注册模组全局配置（COMMON 类型 → 主菜单 Mods → Parachute → Config 可调）
         container.registerConfig(ModConfig.Type.COMMON, ParachuteConfig.SPEC);
 
-        // 客户端专用：在游戏根目录创建 parachute/ 文件夹并导出内置伞。
-        // 只有客户端的 ParachuteAssets 会解析 .bbmodel/.png，服务端从不读取这些文件，
-        // 所以在专用服务端上导出只是白占磁盘、还会让服主误以为往里丢模型能分发给玩家。
-        // FMLEnvironment 是公共类，这里不涉及任何客户端类型，主类依然 dist-clean。
-        if (FMLEnvironment.dist.isClient()) {
-            ParachuteManager.ensureParachuteFolder();
-        }
+        // 两端都要在游戏根目录创建 parachute/ 并导出内置伞：
+        // 客户端用它渲染（本地伞库，支持热加载），服务端用它当伞库
+        // （/parachute list|upload|download|distribute 读写的就是服务端的这个文件夹）。
+        ParachuteManager.ensureParachuteFolder();
 
         ModBlocks.BLOCKS.register(modEventBus);
         ModBlocks.ITEMS.register(modEventBus);
@@ -89,6 +87,20 @@ public class ParachuteMod {
                         SyncParachuteTransformPayload.handleServer(payload, serverPlayer);
                     }
                 }
+        );
+
+        // 伞文件传输：文件分片双向使用（谁收到就写进谁的 parachute/），
+        // 服务端方向在 ParachuteFileChunkPayload.handle 里做 OP 校验。
+        registrar.playBidirectional(
+                ParachuteFileChunkPayload.TYPE,
+                ParachuteFileChunkPayload.STREAM_CODEC,
+                ParachuteFileChunkPayload::handle
+        );
+        // 服务端 → 客户端：请求对方把本地伞传上来（/parachute upload）
+        registrar.playToClient(
+                ParachuteUploadRequestPayload.TYPE,
+                ParachuteUploadRequestPayload.STREAM_CODEC,
+                ParachuteUploadRequestPayload::handle
         );
     }
 

@@ -15,20 +15,25 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 
 /**
- * 伞包文件夹管理器。
+ * 伞包文件夹管理器：管理游戏根目录下的 {@code parachute/}（本端的伞库）。
  *
- * <p>客户端在游戏根目录创建 {@code parachute/}，每个子文件夹是一把伞，
- * 内含 {@code <伞名>.bbmodel}（模型+动画+内嵌贴图）和可选的同目录 {@code .png} 贴图。
- * 客户端首次加载时自动把内置的 5 把伞（大伞/小伞系列）从模组资源导出到该文件夹。</p>
+ * <p>每个子文件夹是一把伞，内含 {@code <伞名>.bbmodel}（模型+动画+内嵌贴图）和可选的同目录
+ * {@code .png} 贴图。首次加载（文件夹原本不存在）时自动把内置的 5 把伞（大伞/小伞系列）
+ * 从模组资源导出到该文件夹。</p>
  *
- * <p><b>仅客户端使用</b>：解析模型/贴图的是 {@code client.assets.ParachuteAssets}，
- * 专用服务端从不读取该文件夹（伞名只是方块实体 NBT 里的一个字符串，
- * 由各客户端在本地解析），所以服务端不会创建也不会导出它——
- * 往服务端的 {@code parachute/} 里放模型同样不会分发给玩家。</p>
+ * <p><b>两端都会创建</b>，只是用途不同：</p>
+ * <ul>
+ *   <li><b>客户端</b>：解析模型/贴图渲染（{@code client.assets.ParachuteAssets}，支持文件夹热加载）</li>
+ *   <li><b>服务端</b>：作为服务端伞库，{@code /parachute list|upload|download|distribute}
+ *       读写的就是服务端的这个文件夹；服务端自己不做渲染，只负责存放与分发</li>
+ * </ul>
+ *
+ * <p>文件在两端的搬运见 {@link ParachuteTransfer}。</p>
  */
 public final class ParachuteManager {
 
@@ -95,6 +100,26 @@ public final class ParachuteManager {
         } catch (IOException e) {
             return false;
         }
+    }
+
+    /**
+     * 扫描 {@code parachute/} 下所有含 {@code .bbmodel} 的子文件夹，返回伞名列表（已排序）。
+     *
+     * <p>客户端用它展示可选伞；服务端用它做伞库列表（{@code /parachute list}、download、distribute）。</p>
+     */
+    public static List<String> listParachuteIds() {
+        List<String> ids = new ArrayList<>();
+        Path root = rootFolder();
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(root)) {
+            for (Path p : ds) {
+                if (Files.isDirectory(p) && hasBbmodel(p)) {
+                    ids.add(p.getFileName().toString());
+                }
+            }
+        } catch (IOException ignored) {
+        }
+        ids.sort(String::compareTo);
+        return ids;
     }
 
     /**
