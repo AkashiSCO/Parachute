@@ -60,7 +60,8 @@ public record SyncParachuteSelectionPayload(BlockPos pos, String name) implement
             if (be instanceof ParachuteBlockEntity pbe) {
                 pbe.setParachuteName(name);
                 pbe.setChanged();
-                level.sendBlockUpdated(payload.pos(), be.getBlockState(), be.getBlockState(), 3);
+                // 统一走 BE 的广播入口（同样是 sendBlockUpdated，只是 flags 用 UPDATE_CLIENTS）
+                pbe.syncToClients();
             }
             return;
         }

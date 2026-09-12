@@ -892,8 +892,31 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
      */
     public float getAttachOffset() { return -0.25f; }
 
-    /** 标记方块实体需要保存（触发 NBT 写入 + 客户端同步），等同于 {@link BlockEntity#setChanged()} */
+    /** 标记方块实体需要保存（仅触发存档写入；<b>不会</b>把改动发给客户端，渲染参数要用 {@link #syncToClients()}） */
     private void markDirty() { this.setChanged(); }
+
+    /**
+     * 服务端：把方块实体的当前数据广播给所有正在跟踪该区块的客户端。
+     *
+     * <h3>为什么必须显式调用</h3>
+     * <p>渲染相关的状态（旋转 / 枢轴 / 整体偏移 / 锁定自摆动 / 伞名 / 染色）只存在方块实体里，
+     * 不随 blockstate 变化：{@link #markDirty()}（= {@code setChanged()}）只把区块标记为待存档，
+     * 一个包都不发。结果是——发起修改的玩家能看到效果（客户端界面是直接改本地 BE 的），
+     * 其他玩家只能等到区块重新下发（重进世界 / 走远再回来）才看得到。</p>
+     *
+     * <p>开伞/收伞之所以看起来正常，是因为它顺带改了 blockstate 的 {@code deployed} 属性，
+     * 走 {@code Level.setBlock} → {@code markAndNotifyBlock} → {@code sendBlockUpdated} 自动带了一次
+     * 方块实体数据包。纯参数修改没有这一步，所以必须自己广播。</p>
+     *
+     * <p>客户端调用会被直接忽略；{@code ServerLevel#sendBlockUpdated} 内部无条件调用
+     * {@code ChunkMap.blockChanged} 把 {@link #getUpdatePacket()} 发给跟踪玩家，
+     * 因此 flags 只影响光照/寻路缓存，不影响发包。</p>
+     */
+    public void syncToClients() {
+        if (this.level == null || this.level.isClientSide) return;
+        BlockState state = this.getBlockState();
+        this.level.sendBlockUpdated(this.worldPosition, state, state, Block.UPDATE_CLIENTS);
+    }
 
     /**
      * 同步 blockstate 中 deployed 属性与内存状态一致。

@@ -1,4 +1,4 @@
-# Create:Parachute (1.1.0a)
+# Create:Parachute (1.1.0b)
 
 A parachute mod for **Create** and **Sable physics**.
 

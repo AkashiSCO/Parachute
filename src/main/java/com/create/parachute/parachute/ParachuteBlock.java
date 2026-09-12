@@ -98,6 +98,11 @@ public class ParachuteBlock extends BaseEntityBlock {
         // net.minecraft.client.*，注册阶段就崩溃（invalid dist DEDICATED_SERVER）。
         if (level.isClientSide) {
             ClientHooks.openControllerScreen(pos);
+        } else if (level.getBlockEntity(pos) instanceof ParachuteBlockEntity pbe) {
+            // 打开 GUI 时重发一次当前数据：GUI 显示的是客户端 BE 的值，
+            // 这里兜底保证「再次打开界面看到的一定是服务端的最新状态」
+            // （否则任何一处漏广播都会表现为"设置明明生效了，界面还显示关闭"）。
+            pbe.syncToClients();
         }
         return InteractionResult.SUCCESS;
     }
@@ -110,6 +115,8 @@ public class ParachuteBlock extends BaseEntityBlock {
                 BlockEntity be = level.getBlockEntity(pos);
                 if (be instanceof ParachuteBlockEntity pbe) {
                     pbe.setDyeColor(dyeItem.getDyeColor());
+                    // 染色同样是纯 BE 数据，不改 blockstate，必须广播（否则只有染色的人自己看得到）
+                    pbe.syncToClients();
                     level.playSound(null, pos, SoundEvents.BONE_MEAL_USE, SoundSource.BLOCKS, 1.0F, 1.0F);
                 }
             }
@@ -121,6 +128,7 @@ public class ParachuteBlock extends BaseEntityBlock {
                 BlockEntity be = level.getBlockEntity(pos);
                 if (be instanceof ParachuteBlockEntity pbe) {
                     pbe.clearDye();
+                    pbe.syncToClients();
                     level.playSound(null, pos, SoundEvents.AXE_STRIP, SoundSource.BLOCKS, 1.0F, 1.0F);
                 }
             }

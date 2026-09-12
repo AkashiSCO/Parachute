@@ -58,7 +58,9 @@ public record SyncParachuteTransformPayload(BlockPos pos, int mode, float x, flo
                     return;
                 }
             }
+            // 旋转/枢轴/偏移是纯渲染参数，不动 blockstate，必须显式广播，否则其他玩家看不到
             pbe.setChanged();
+            pbe.syncToClients();
         }
     }
 }

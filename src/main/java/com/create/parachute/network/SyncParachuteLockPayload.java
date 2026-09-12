@@ -38,7 +38,9 @@ public record SyncParachuteLockPayload(BlockPos pos, boolean locked) implements 
         BlockEntity be = level.getBlockEntity(payload.pos());
         if (be instanceof ParachuteBlockEntity pbe) {
             pbe.setWobbleLocked(payload.locked());
+            // 锁定只影响渲染，不动 blockstate，必须显式广播给其他玩家
             pbe.setChanged();
+            pbe.syncToClients();
         }
     }
 }

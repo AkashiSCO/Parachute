@@ -56,7 +56,10 @@ public class ParachutePackItem extends BlockItem {
                 String name = getParachuteName(context.getItemInHand());
                 if (!name.isEmpty()) {
                     pbe.setParachuteName(name);
+                    // 放置时的那次 setBlock 已经把「默认伞」的 NBT 发过去了，这里改名后必须再广播一次，
+                    // 否则放置者自己的客户端也要等区块重载才会显示成伞包里选的伞
                     pbe.setChanged();
+                    pbe.syncToClients();
                 }
             }
         }

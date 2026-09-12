@@ -51,7 +51,9 @@ public record SyncParachuteConfigPayload(
             pbe.setDisconnectSpeedThreshold(payload.disconnectSpeed() / 100.0D);
             pbe.setDisconnectOnLowSpeed(payload.disconnectOnLowSpeed());
             pbe.setDisconnectOnRedstonePulse(payload.disconnectOnRedstone());
+            // 这些值服务端物理用、客户端 GUI 显示，一并广播，别让其他玩家看到旧数值
             pbe.setChanged();
+            pbe.syncToClients();
         }
     }
 }
