@@ -15,23 +15,33 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 
 /**
- * 伞包文件夹管理器：管理游戏根目录下的 {@code parachute/}（本端的伞库）。
+ * 伞包文件夹管理器：管理游戏根目录下的 {@code parachute/} 及其子目录。
  *
- * <p>每个子文件夹是一把伞，内含 {@code <伞名>.bbmodel}（模型+动画+内嵌贴图）和可选的同目录
+ * <p>每个伞文件夹是一把伞，内含 {@code <伞名>.bbmodel}（模型+动画+内嵌贴图）和可选的同目录
  * {@code .png} 贴图。首次加载（文件夹原本不存在）时自动把内置的 5 把伞（大伞/小伞系列）
  * 从模组资源导出到该文件夹。</p>
  *
- * <p><b>两端都会创建</b>，只是用途不同：</p>
- * <ul>
- *   <li><b>客户端</b>：解析模型/贴图渲染（{@code client.assets.ParachuteAssets}，支持文件夹热加载）</li>
- *   <li><b>服务端</b>：作为服务端伞库，{@code /parachute list|upload|download|distribute}
- *       读写的就是服务端的这个文件夹；服务端自己不做渲染，只负责存放与分发</li>
- * </ul>
+ * <h2>目录结构</h2>
+ * <pre>
+ * 服务端（专用服务器 / 单机 / LAN 主机）
+ * parachute/&lt;伞名&gt;/…            ← 服务端伞库，布局从未变过
+ *
+ * 客户端（玩家本机）
+ * parachute/
+ * ├─ &lt;伞名&gt;/…                   ← 自己开世界时的伞库（单机 / LAN 主机）
+ * ├─ local/&lt;伞名&gt;/…             ← 玩家自己的伞：上传来源，单机/主机时的伞源
+ * └─ server/&lt;服务器存档UUID&gt;/&lt;伞名&gt;/… ← 从该服务器下载/分发下来的伞（拿不到 UUID 时按地址兜底）
+ * </pre>
+ *
+ * <p>「当前该用哪个文件夹」由 {@link ParachuteScope} 决定；服务端伞库永远是
+ * {@link #rootFolder()} 本身，所以 {@code /parachute list|upload|download|distribute}
+ * 的行为不受影响。</p>
  *
  * <p>文件在两端的搬运见 {@link ParachuteTransfer}。</p>
  */
@@ -39,6 +49,10 @@ public final class ParachuteManager {
 
     /** 伞包根文件夹名（游戏根目录下） */
     public static final String FOLDER_NAME = "parachute";
+    /** 客户端自己的伞文件夹名（{@code parachute/local}） */
+    public static final String LOCAL_FOLDER_NAME = "local";
+    /** 按服务器分文件夹的父目录名（{@code parachute/server/<服务器存档 UUID>}） */
+    public static final String SERVER_FOLDER_NAME = "server";
     /** 未选择伞时的默认伞（蘑菇伞） */
     public static final String DEFAULT_PARACHUTE = "mushroom";
     /** 内置伞 id（对应 resources/models/entity/*.bbmodel） */
@@ -50,9 +64,36 @@ public final class ParachuteManager {
     private ParachuteManager() {
     }
 
-    /** 游戏根目录下的 parachute 文件夹（如不存在则创建） */
+    // ============================================================
+    // 路径
+    // ============================================================
+
+    /** {@code parachute/} 的路径（不创建目录） */
+    public static Path rootPath() {
+        return FMLPaths.GAMEDIR.get().resolve(FOLDER_NAME);
+    }
+
+    /** {@code parachute/local} 的路径（不创建目录） */
+    public static Path localPath() {
+        return rootPath().resolve(LOCAL_FOLDER_NAME);
+    }
+
+    /**
+     * {@code parachute/server/<folder>} 的路径（不创建目录）。
+     * {@code folder} 要么是服务端同步来的存档 UUID，要么是兜底的服务器地址
+     * （{@link ParachuteScope#sanitizeServerFolder} / {@link ParachuteScope#canonicalUuid} 生成）；
+     * 这里再做一道兜底，任何带分隔符/上级目录的名字都会被换成 {@code unknown}，绝不会越出 {@code parachute/}。
+     */
+    public static Path serverPath(String folder) {
+        return rootPath().resolve(SERVER_FOLDER_NAME).resolve(safeFolder(folder));
+    }
+
+    /** 游戏根目录下的 {@code parachute} 文件夹（如不存在则创建） */
     public static Path rootFolder() {
-        Path dir = FMLPaths.GAMEDIR.get().resolve(FOLDER_NAME);
+        return createDir(rootPath());
+    }
+
+    private static Path createDir(Path dir) {
         try {
             Files.createDirectories(dir);
         } catch (IOException ignored) {
@@ -60,21 +101,78 @@ public final class ParachuteManager {
         return dir;
     }
 
+    /** 兜底：把不能当文件夹名的东西统一换成 {@code unknown} */
+    private static String safeFolder(String folder) {
+        if (folder == null || folder.isEmpty() || folder.length() > 64
+                || folder.contains("/") || folder.contains("\\") || folder.contains("..")
+                || folder.equals(".")) {
+            return "unknown";
+        }
+        return folder;
+    }
+
+    // ============================================================
+    // 初始化 / 旧版本迁移
+    // ============================================================
+
     /**
-     * 确保 parachute/ 文件夹存在（<b>仅客户端调用</b>，见类注释）。
-     * 首次加载（文件夹原本不存在）导出全部内置伞；
-     * 后续加载只确保蘑菇伞存在（其他伞玩家可自行删除，不会重新导出）。
+     * 两端都会调：确保<b>服务端伞库</b> {@code parachute/} 存在。
+     *
+     * <p>首次加载（文件夹原本不存在）导出全部内置伞；后续加载只确保蘑菇伞存在
+     * （其他伞玩家可自行删除，不会重新导出）。客户端上这个文件夹是自己开世界
+     * （单机 / LAN 主机）时的伞库，所以客户端也要走一遍。</p>
      */
-    public static void ensureParachuteFolder() {
-        Path root = FMLPaths.GAMEDIR.get().resolve(FOLDER_NAME);
-        boolean firstLoad = !Files.isDirectory(root);
-        if (firstLoad) {
-            for (String id : BUILTIN_IDS) {
-                exportIfMissing(root, id);
+    public static void ensureServerLibrary() {
+        ensureBuiltins(rootPath(), BUILTIN_IDS);
+    }
+
+    /**
+     * <b>客户端</b>调用：确保玩家自己的伞文件夹 {@code parachute/local} 存在。
+     *
+     * <p>第一次创建时会先把现有的 {@code parachute/<伞名>} 各复制一份进来（旧版本升级迁移）。
+     * 用复制而不是移动：{@code parachute/<伞名>} 在客户端上还是「自己开世界」时的伞库，
+     * 主机开 LAN 时 {@code /parachute list|distribute} 读的就是它，删掉就没了。</p>
+     */
+    public static void ensureClientFolders() {
+        Path root = rootPath();
+        Path local = localPath();
+        boolean firstLoad = !Files.isDirectory(local);
+
+        if (firstLoad && Files.isDirectory(root)) {
+            for (String id : listParachuteIds(root)) {
+                Path dst = local.resolve(id);
+                if (Files.isDirectory(dst)) continue;
+                try {
+                    copyTree(root.resolve(id), dst);
+                    ParachuteMod.LOGGER.info("Copied parachute '{}' into {}", id, dst);
+                } catch (IOException e) {
+                    ParachuteMod.LOGGER.warn("Failed to copy parachute '{}' into local: {}", id, e.toString());
+                }
             }
-        } else {
-            // 后续进入世界：只补全蘑菇伞
-            exportIfMissing(root, DEFAULT_PARACHUTE);
+        }
+        createDir(local);
+        ensureBuiltins(local, firstLoad ? BUILTIN_IDS : List.of(DEFAULT_PARACHUTE));
+    }
+
+    /** 首次加载导出全部内置伞，之后只补默认伞 */
+    private static void ensureBuiltins(Path root, List<String> ids) {
+        createDir(root);
+        for (String id : ids) {
+            exportIfMissing(root, id);
+        }
+    }
+
+    /** 递归复制整棵文件夹（迁移用） */
+    private static void copyTree(Path from, Path to) throws IOException {
+        try (var walk = Files.walk(from)) {
+            for (Path path : walk.toList()) {
+                Path dst = to.resolve(from.relativize(path));
+                if (Files.isDirectory(path)) {
+                    Files.createDirectories(dst);
+                } else {
+                    Files.copy(path, dst, StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
         }
     }
 
@@ -103,13 +201,18 @@ public final class ParachuteManager {
     }
 
     /**
-     * 扫描 {@code parachute/} 下所有含 {@code .bbmodel} 的子文件夹，返回伞名列表（已排序）。
+     * 扫描 {@code parachute/}（服务端伞库）下所有含 {@code .bbmodel} 的子文件夹，返回伞名列表（已排序）。
      *
-     * <p>客户端用它展示可选伞；服务端用它做伞库列表（{@code /parachute list}、download、distribute）。</p>
+     * <p>服务端用它做伞库列表（{@code /parachute list}、download、distribute）；客户端渲染/上传
+     * 用的是带伞源扫描的 {@code client.assets.ParachuteAssets}，不再走这里。</p>
      */
     public static List<String> listParachuteIds() {
+        return listParachuteIds(rootFolder());
+    }
+
+    /** 扫描指定伞源根目录下的伞名列表（含 {@code .bbmodel} 的直接子文件夹，已排序） */
+    public static List<String> listParachuteIds(Path root) {
         List<String> ids = new ArrayList<>();
-        Path root = rootFolder();
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(root)) {
             for (Path p : ds) {
                 if (Files.isDirectory(p) && hasBbmodel(p)) {

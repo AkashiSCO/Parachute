@@ -37,6 +37,8 @@ import org.jetbrains.annotations.Nullable;
 public class ParachuteBlock extends BaseEntityBlock {
     public static final MapCodec<ParachuteBlock> CODEC = simpleCodec(properties -> new ParachuteBlock());
     public static final BooleanProperty DEPLOYED = BooleanProperty.create("deployed");
+    /** 是否渲染方块自身的模型（伞包本体）。false = 只留 BER 画的伞面，用于把伞包藏起来 */
+    public static final BooleanProperty PACK = BooleanProperty.create("pack");
     public static final DirectionProperty FACING = BlockStateProperties.FACING;
     private static final VoxelShape SHAPE_UP = Block.box(4, 0, 4, 12, 4, 12);
     private static final VoxelShape SHAPE_DOWN = Block.box(4, 12, 4, 12, 16, 12);
@@ -55,6 +57,7 @@ public class ParachuteBlock extends BaseEntityBlock {
                 .requiresCorrectToolForDrops());
         this.registerDefaultState(this.stateDefinition.any()
                 .setValue(DEPLOYED, false)
+                .setValue(PACK, true)
                 .setValue(FACING, Direction.UP));
     }
 
@@ -65,7 +68,7 @@ public class ParachuteBlock extends BaseEntityBlock {
 
     @Override
     protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
-        builder.add(DEPLOYED, FACING);
+        builder.add(DEPLOYED, FACING, PACK);
     }
 
     @Nullable
@@ -74,9 +77,10 @@ public class ParachuteBlock extends BaseEntityBlock {
         return this.defaultBlockState().setValue(FACING, context.getClickedFace());
     }
 
+    /** 伞包隐藏时方块模型不渲染（BER 的伞面照旧）；靠 blockstate 同步，所有玩家一致 */
     @Override
     public RenderShape getRenderShape(BlockState state) {
-        return RenderShape.MODEL;
+        return state.getValue(PACK) ? RenderShape.MODEL : RenderShape.INVISIBLE;
     }
 
     @Override

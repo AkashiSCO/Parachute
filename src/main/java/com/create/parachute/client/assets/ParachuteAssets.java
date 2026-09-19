@@ -2,6 +2,7 @@ package com.create.parachute.client.assets;
 
 import com.create.parachute.ParachuteMod;
 import com.create.parachute.data.ParachuteManager;
+import com.create.parachute.data.ParachuteScope;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -30,12 +31,25 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 客户端伞资源管理器（热加载）：扫描游戏根目录 {@code parachute/}，解析每把伞的
- * .bbmodel（模型 + 开伞动画 + 贴图），按伞名缓存。
+ * 客户端伞资源管理器（热加载）：按<b>伞源</b>扫描并解析每把伞的 .bbmodel
+ * （模型 + 开伞动画 + 贴图），按纯伞名缓存。
+ *
+ * <h2>伞源与优先级</h2>
+ * <p>扫描顺序就是优先级顺序（{@link ParachuteScope}）：</p>
+ * <ul>
+ *   <li>连别人的服务器时：先 {@code parachute/server/<服务器存档UUID>/}，再 {@code parachute/local/}
+ *       —— 服务器下发的伞优先，玩家本地同名伞作为兜底（这样第一次进服、服务器文件夹还空着时
+ *       不会一把伞都没有）</li>
+ *   <li>单机 / 自己开的世界（含 LAN 主机）：只用 {@code parachute/local/}</li>
+ * </ul>
+ * <p>对外（GUI、方块 NBT、网络包）始终只有<b>纯伞名</b>，来源只在本类内部用于选文件夹和拼贴图
+ * 路径 {@code parachute/<来源>/<伞名>/original}——同名但不同来源的两把伞各有一张贴图，
+ * 不会互相覆盖。</p>
  *
  * <p><b>热加载</b>：每次访问时按文件夹内文件修改时间判断是否有变化（节流 0.2 秒），
  * 新增/修改/删除伞自动生效，无需重启、无需手动刷新。GUI 打开时强制刷新。</p>
@@ -51,12 +65,34 @@ public final class ParachuteAssets {
                                  boolean bedrock) {
     }
 
+    /** 一把伞的实际位置：所在文件夹 + 来源标签（{@code local} 或 {@code server/<文件夹名>}） */
+    private record Entry(Path dir, String source) {
+    }
+
+    /** 缓存 key = 来源标签 + "/" + 纯伞名 */
     private static Map<String, BakedParachute> cache;
+    /** 纯伞名 → 生效的那一份（按优先级去重后的结果） */
+    private static Map<String, Entry> entries;
     private static List<String> idList;
-    /** 伞 id → 文件夹签名（全部文件最大修改时间），用于热加载检测 */
+    /** 缓存 key → 文件夹签名（全部文件最大修改时间），用于热加载检测 */
     private static final Map<String, Long> signatures = new HashMap<>();
     private static long lastScan;
     private static boolean loggedInitial;
+
+    private static String keyOf(String source, String id) {
+        return source + "/" + id;
+    }
+
+    /** 当前伞源按优先级排好序：连服务器时服务器文件夹优先，local 永远在最后兜底 */
+    private static List<ParachuteScope.Source> activeSources() {
+        List<ParachuteScope.Source> sources = new ArrayList<>(2);
+        ParachuteScope.Source scope = ParachuteScope.clientScope();
+        if (!scope.isLocal()) {
+            sources.add(scope);
+        }
+        sources.add(ParachuteScope.local());
+        return sources;
+    }
 
     /** 热扫描节流间隔（毫秒）：导入/修改伞后约 0.2 秒内自动可见 */
     private static final long SCAN_INTERVAL_MS = 200L;
@@ -68,12 +104,15 @@ public final class ParachuteAssets {
     @Nullable
     public static BakedParachute get(String name) {
         refresh();
-        if (name == null || name.isEmpty()) {
-            return cache.get(ParachuteManager.DEFAULT_PARACHUTE);
-        }
-        BakedParachute p = cache.get(name);
-        if (p != null) return p;
-        return cache.get(ParachuteManager.DEFAULT_PARACHUTE);
+        BakedParachute parachute = lookup(name);
+        return parachute != null ? parachute : lookup(ParachuteManager.DEFAULT_PARACHUTE);
+    }
+
+    @Nullable
+    private static BakedParachute lookup(@Nullable String name) {
+        if (name == null || name.isEmpty() || entries == null) return null;
+        Entry entry = entries.get(name);
+        return entry == null ? null : cache.get(keyOf(entry.source(), name));
     }
 
     /** 该伞是否为 bedrock 模式（lav25 之类）。影响渲染朝向补偿：bedrock 需额外绕 Y 旋转。 */
@@ -82,10 +121,32 @@ public final class ParachuteAssets {
         return p != null && p.bedrock();
     }
 
-    /** 已解析的伞 id 列表（GUI 用），空时返回空列表 */
+    /** 已解析的伞名列表（GUI 用），空时返回空列表 */
     public static List<String> listIds() {
         refresh();
         return new ArrayList<>(idList);
+    }
+
+    /**
+     * 该伞是不是「服务器文件夹里没有、只好用玩家本地那份」——GUI 用它给条目加个来源标记，
+     * 免得玩家以为服务器下发的伞没生效。
+     */
+    public static boolean isLocalFallback(String name) {
+        refresh();
+        if (entries == null) return false;
+        Entry entry = entries.get(name);
+        // 只有在「服务器伞源生效」时才叫兜底：单机/主机时全部伞本来就来自 local
+        return entry != null
+                && ParachuteManager.LOCAL_FOLDER_NAME.equals(entry.source())
+                && !ParachuteScope.clientScope().isLocal();
+    }
+
+    /** 该伞的伞源标签（{@code local} / {@code server/<地址>}），没有这把伞返回 null */
+    @Nullable
+    public static String sourceOf(String name) {
+        refresh();
+        Entry entry = entries == null ? null : entries.get(name);
+        return entry == null ? null : entry.source();
     }
 
     /** 强制立即重新扫描（选择界面打开时调用） */
@@ -95,13 +156,14 @@ public final class ParachuteAssets {
     }
 
     /**
-     * 热加载扫描：节流调用；检测到文件夹变化（新增/修改/删除）时只重载变化的伞。
+     * 热加载扫描：节流调用；按伞源优先级扫描，检测到文件夹变化（新增/修改/删除）时只重载变化的伞。
      * 首次调用等价于全量加载。
      */
     public static synchronized void refresh() {
         long now = System.currentTimeMillis();
         if (cache == null) {
             cache = new HashMap<>();
+            entries = new HashMap<>();
             idList = new ArrayList<>();
             lastScan = 0;
         } else if (now - lastScan < SCAN_INTERVAL_MS) {
@@ -109,46 +171,62 @@ public final class ParachuteAssets {
         }
         lastScan = now;
 
-        Path root = ParachuteManager.rootFolder();
-        List<String> found = new ArrayList<>();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(root)) {
-            for (Path dir : ds) {
-                if (!Files.isDirectory(dir)) continue;
-                String id = dir.getFileName().toString();
-                Path bb = findBbmodel(dir);
-                if (bb == null) continue;
-                found.add(id);
-                long sig = folderSignature(dir);
-                Long old = signatures.get(id);
-                if (!cache.containsKey(id) || old == null || old != sig) {
-                    signatures.put(id, sig);
-                    BakedParachute baked = loadOne(dir, id);
-                    if (baked != null) {
-                        cache.put(id, baked);
-                        ParachuteMod.LOGGER.info("Hot-loaded parachute '{}'", id);
-                    } else {
-                        cache.remove(id);
-                        ParachuteMod.LOGGER.warn("Parachute '{}' failed to load; removed", id);
-                    }
+        // 按优先级收集：同名伞只保留优先级最高的那一个
+        Map<String, Entry> found = new LinkedHashMap<>();
+        for (ParachuteScope.Source source : activeSources()) {
+            Path root = source.root();
+            if (!Files.isDirectory(root)) continue;
+            try (DirectoryStream<Path> ds = Files.newDirectoryStream(root)) {
+                for (Path dir : ds) {
+                    if (!Files.isDirectory(dir)) continue;
+                    String id = dir.getFileName().toString();
+                    if (found.containsKey(id)) continue;
+                    if (findBbmodel(dir) == null) continue;
+                    found.put(id, new Entry(dir, source.label()));
+                }
+            } catch (IOException e) {
+                ParachuteMod.LOGGER.warn("Failed to scan parachute source '{}': {}", root, e.toString());
+            }
+        }
+
+        Map<String, BakedParachute> next = new HashMap<>();
+        for (Map.Entry<String, Entry> e : found.entrySet()) {
+            String id = e.getKey();
+            Entry entry = e.getValue();
+            String key = keyOf(entry.source(), id);
+            long sig = folderSignature(entry.dir());
+            Long old = signatures.get(key);
+            BakedParachute baked = cache.get(key);
+            if (baked == null || old == null || old != sig) {
+                signatures.put(key, sig);
+                baked = loadOne(entry.dir(), id, entry.source());
+                if (baked != null) {
+                    ParachuteMod.LOGGER.info("Hot-loaded parachute '{}' from {}", id, entry.source());
+                } else {
+                    ParachuteMod.LOGGER.warn("Parachute '{}' failed to load; removed", key);
+                    continue;
                 }
             }
-        } catch (IOException e) {
-            ParachuteMod.LOGGER.warn("Failed to scan parachute folder: {}", e.toString());
+            next.put(key, baked);
         }
 
         // 移除已删除的伞
-        for (String id : new ArrayList<>(cache.keySet())) {
-            if (!found.contains(id)) {
-                cache.remove(id);
-                signatures.remove(id);
-                ParachuteMod.LOGGER.info("Removed parachute '{}' (folder gone)", id);
+        for (String gone : new ArrayList<>(cache.keySet())) {
+            if (!next.containsKey(gone)) {
+                cache.remove(gone);
+                signatures.remove(gone);
+                ParachuteMod.LOGGER.info("Removed parachute '{}' (folder gone)", gone);
             }
         }
-        idList = new ArrayList<>(found);
+
+        cache = next;
+        entries = found;
+        idList = new ArrayList<>(found.keySet());
         idList.sort(String::compareTo);
         if (!loggedInitial) {
             loggedInitial = true;
-            ParachuteMod.LOGGER.info("Loaded {} parachutes from {}", idList.size(), root);
+            ParachuteMod.LOGGER.info("Loaded {} parachute(s) for source '{}'",
+                    idList.size(), ParachuteScope.clientScope().label());
         }
     }
 
@@ -195,7 +273,7 @@ public final class ParachuteAssets {
     }
 
     @Nullable
-    private static BakedParachute loadOne(Path dir, String id) {
+    private static BakedParachute loadOne(Path dir, String id, String source) {
         try {
             Path bbFile = findBbmodel(dir);
             if (bbFile == null) return null;
@@ -220,8 +298,8 @@ public final class ParachuteAssets {
             // 无动画的模型也允许加载：anim 为 null，渲染时直接显示模型
             float lengthSeconds = anim != null ? anim.lengthInSeconds() : 1.0F;
 
-            ResourceLocation texture = loadTexture(dir, id, root);
-            ResourceLocation whiteTexture = loadWhiteTexture(dir, id, root);
+            ResourceLocation texture = loadTexture(dir, id, source, root);
+            ResourceLocation whiteTexture = loadWhiteTexture(dir, id, source, root);
 
             boolean bedrock = "bedrock".equalsIgnoreCase(
                     GsonHelper.getAsString(GsonHelper.getAsJsonObject(root, "meta", new JsonObject()),
@@ -229,9 +307,30 @@ public final class ParachuteAssets {
 
             return new BakedParachute(id, modelPart, anim, texture, whiteTexture, lengthSeconds, bedrock);
         } catch (Exception e) {
-            ParachuteMod.LOGGER.warn("Failed to load parachute '{}': {}", id, e.toString());
+            ParachuteMod.LOGGER.warn("Failed to load parachute '{}/{}': {}", source, id, e.toString());
             return null;
         }
+    }
+
+    /**
+     * 贴图的 {@link ResourceLocation}：{@code parachute/<来源>/<伞名>/<后缀>}。
+     * 来源和伞名都过一遍 {@link #rlSafe}，保证路径合法；同名但来源不同的两把伞因此各有一张贴图。
+     */
+    private static ResourceLocation textureLocation(String source, String id, String suffix) {
+        return ResourceLocation.fromNamespaceAndPath(ParachuteMod.MOD_ID,
+                "parachute/" + source + "/" + rlSafe(id) + "/" + suffix);
+    }
+
+    /** 把文件夹名压成 ResourceLocation 合法字符（{@code [a-z0-9._-]}） */
+    private static String rlSafe(String name) {
+        StringBuilder sb = new StringBuilder(name.length());
+        for (int i = 0; i < name.length(); i++) {
+            char c = Character.toLowerCase(name.charAt(i));
+            boolean safe = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                    || c == '_' || c == '-' || c == '.';
+            sb.append(safe ? c : '_');
+        }
+        return sb.toString();
     }
 
     /**
@@ -239,17 +338,16 @@ public final class ParachuteAssets {
      * 未染色状态显示它（不染色）。
      */
     @Nullable
-    private static ResourceLocation loadTexture(Path dir, String id, JsonObject bbRoot) {
+    private static ResourceLocation loadTexture(Path dir, String id, String source, JsonObject bbRoot) {
         try {
             NativeImage image = loadNativeImage(dir, id, bbRoot);
             if (image == null) return null;
 
-            ResourceLocation location = ResourceLocation.fromNamespaceAndPath(
-                    ParachuteMod.MOD_ID, "parachute/" + id + "/original");
+            ResourceLocation location = textureLocation(source, id, "original");
             registerTexture(location, image);
             return location;
         } catch (Exception e) {
-            ParachuteMod.LOGGER.warn("Failed to load texture for parachute '{}': {}", id, e.toString());
+            ParachuteMod.LOGGER.warn("Failed to load texture for parachute '{}/{}': {}", source, id, e.toString());
             return null;
         }
     }
@@ -259,18 +357,17 @@ public final class ParachuteAssets {
      * 染色状态 = 白色底 × 染料 ARGB。
      */
     @Nullable
-    private static ResourceLocation loadWhiteTexture(Path dir, String id, JsonObject bbRoot) {
+    private static ResourceLocation loadWhiteTexture(Path dir, String id, String source, JsonObject bbRoot) {
         try {
             NativeImage image = loadNativeImage(dir, id, bbRoot);
             if (image == null) return null;
             NativeImage white = toWhiteBase(image);
 
-            ResourceLocation location = ResourceLocation.fromNamespaceAndPath(
-                    ParachuteMod.MOD_ID, "parachute/" + id + "/white");
+            ResourceLocation location = textureLocation(source, id, "white");
             registerTexture(location, white);
             return location;
         } catch (Exception e) {
-            ParachuteMod.LOGGER.warn("Failed to generate white texture for parachute '{}': {}", id, e.toString());
+            ParachuteMod.LOGGER.warn("Failed to generate white texture for parachute '{}/{}': {}", source, id, e.toString());
             return null;
         }
     }

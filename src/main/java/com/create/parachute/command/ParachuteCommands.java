@@ -1,6 +1,8 @@
 package com.create.parachute.command;
 
+import com.create.parachute.ParachuteConfig;
 import com.create.parachute.ParachuteMod;
+import com.create.parachute.data.ParachuteDownloads;
 import com.create.parachute.data.ParachuteManager;
 import com.create.parachute.data.ParachuteTransfer;
 import com.create.parachute.network.ParachuteUploadRequestPayload;
@@ -27,17 +29,23 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.function.Predicate;
 
 /**
- * {@code /parachute} 指令族——服务端伞库的运维入口（需要 OP，权限等级 2）。
+ * {@code /parachute} 指令族——服务端伞库的运维入口。
  *
  * <pre>
- * /parachute list [page]        列出服务端 parachute/ 里的伞名，每页 10 个
- * /parachute upload [name]      请求指令执行者把自己的本地伞（同名/全部）上传到服务端，重名替换
- * /parachute download [name]    把服务端同名伞（或全部伞打包成 server-parachute.zip）下载到本地
- * /parachute distribute [目标]   把服务端全部伞分发给服务器内所有玩家 / 指定玩家（支持 @a、@p、@r、玩家名），重名替换
- * /parachute delete [name]      删除服务端伞（同名/全部），先弹聊天框确认，点 [确认] 才真正删除
+ * /parachute list [page]        列出服务端 parachute/ 里的伞名，每页 10 个          【所有人】
+ * /parachute download [name]    把自己的伞库那份（同名/全部）拉到本地              【所有人】
+ * /parachute upload [name]      请求把执行者本地 parachute/local 的伞上传到服务端    【OP】
+ * /parachute distribute [目标]   把服务端全部伞分发给服务器内所有玩家 / 指定玩家       【OP】
+ * /parachute delete [name]      删除服务端伞（同名/全部），先弹聊天框确认             【OP】
  * </pre>
+ *
+ * <p>{@code list}/{@code download} 对普通玩家开放（可用
+ * {@link com.create.parachute.ParachuteConfig#ALLOW_PLAYER_DOWNLOAD} 关掉），
+ * 玩家不需要 OP 就能自己拿到服务器的伞；写服务端的三个子指令始终要求 OP（权限等级 2）。
+ * 下载是分批的：排进 {@link ParachuteDownloads} 的每玩家队列，按 tick 预算慢慢发。</p>
  *
  * <p>{@code RegisterCommandsEvent} 是游戏事件总线上的事件，且 Fire 于专用服务端，
  * 所以本类不能引用任何客户端类型（自动注册时扫描器按参数类型分流到游戏总线）。</p>
@@ -51,6 +59,8 @@ public final class ParachuteCommands {
     private static final String CONFIRM_LITERAL = "__confirm";
     /** 聊天框里 [取消] 按钮点击后执行的隐藏子指令名 */
     private static final String CANCEL_LITERAL = "__cancel";
+    /** OP 要求：权限等级 2。写服务端的子指令（upload / distribute / delete）用它 */
+    private static final Predicate<CommandSourceStack> OP = source -> source.hasPermission(2);
 
     private ParachuteCommands() {
     }
@@ -59,28 +69,34 @@ public final class ParachuteCommands {
     public static void onRegisterCommands(RegisterCommandsEvent event) {
         CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
         dispatcher.register(Commands.literal("parachute")
-                .requires(source -> source.hasPermission(2))
+                // ---- 所有玩家都能用：看服务端有哪些伞、自己拉下来 ----
+                // （是否真的允许下载由 ParachuteConfig.ALLOW_PLAYER_DOWNLOAD 决定，在 handler 里判断，
+                //   这样被关掉时能给出明确提示，而不是一句 "Unknown command"）
                 .then(Commands.literal("list")
                         .executes(context -> list(context.getSource(), 1))
                         .then(Commands.argument("page", IntegerArgumentType.integer(1))
                                 .executes(context -> list(context.getSource(),
                                         IntegerArgumentType.getInteger(context, "page")))))
-                .then(Commands.literal("upload")
-                        .executes(context -> requestUpload(context.getSource(), null))
-                        .then(Commands.argument("name", StringArgumentType.word())
-                                .executes(context -> requestUpload(context.getSource(),
-                                        StringArgumentType.getString(context, "name")))))
                 .then(Commands.literal("download")
                         .executes(context -> downloadAll(context.getSource()))
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .executes(context -> downloadOne(context.getSource(),
                                         StringArgumentType.getString(context, "name")))))
+                // ---- 写服务端的操作：始终 OP ----
+                .then(Commands.literal("upload")
+                        .requires(OP)
+                        .executes(context -> requestUpload(context.getSource(), null))
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .executes(context -> requestUpload(context.getSource(),
+                                        StringArgumentType.getString(context, "name")))))
                 .then(Commands.literal("distribute")
+                        .requires(OP)
                         .executes(context -> distribute(context.getSource(), null))
                         .then(Commands.argument("player", EntityArgument.players())
                                 .executes(context -> distribute(context.getSource(),
                                         EntityArgument.getPlayers(context, "player")))))
                 .then(Commands.literal("delete")
+                        .requires(OP)
                         .executes(context -> requestDelete(context.getSource(), null))
                         // 这两个分支只用给聊天框里的 [确认] / [取消] 按钮点击执行，
                         // 用双下划线前缀避免和伞名撞车（伞名可能叫 confirm，但几乎不可能叫 __confirm）
@@ -94,6 +110,16 @@ public final class ParachuteCommands {
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .executes(context -> requestDelete(context.getSource(),
                                         StringArgumentType.getString(context, "name"))))));
+    }
+
+    /**
+     * 普通玩家能不能自己拉伞库。关掉时只有 OP 能用，并且给非 OP 一句明确的话
+     * （而不是 Brigadier 的 "Unknown command"）。
+     */
+    private static boolean allowDownload(CommandSourceStack source) {
+        if (ParachuteConfig.ALLOW_PLAYER_DOWNLOAD.get() || source.hasPermission(2)) return true;
+        source.sendFailure(Component.translatable("command.create_parachute.download.disabled"));
+        return false;
     }
 
     // ============================================================
@@ -111,6 +137,7 @@ public final class ParachuteCommands {
      * 第 2 页接续为 {@code [11]}…{@code [20]}。
      */
     private static int list(CommandSourceStack source, int page) {
+        if (!allowDownload(source)) return 0;
         List<String> ids = ParachuteManager.listParachuteIds();
         if (ids.isEmpty()) {
             source.sendFailure(Component.translatable("command.create_parachute.list.empty",
@@ -156,62 +183,79 @@ public final class ParachuteCommands {
     }
 
     // ============================================================
-    // download —— 服务端 → 执行者客户端
+    // download —— 服务端伞库 → 执行者客户端（分批，排队发送）
     // ============================================================
 
     private static int downloadOne(CommandSourceStack source, String name) throws CommandSyntaxException {
+        if (!allowDownload(source)) return 0;
         ServerPlayer player = source.getPlayerOrException();
+        if (ParachuteDownloads.isBusy(player)) {
+            source.sendFailure(Component.translatable("command.create_parachute.download.busy"));
+            return 0;
+        }
         if (!ParachuteTransfer.isValidFolderName(name)) {
             source.sendFailure(Component.translatable("command.create_parachute.invalid_name", name));
             return 0;
         }
-        if (!ParachuteManager.listParachuteIds().contains(name)) {
+        if (!ParachuteTransfer.listLibraryFolders().contains(name)) {
             source.sendFailure(Component.translatable("command.create_parachute.download.missing", name));
             return 0;
         }
-        int files = ParachuteTransfer.sendFolderToPlayer(player, name);
+        int files = ParachuteDownloads.enqueue(player, List.of(name));
         if (files < 0) {
+            source.sendFailure(Component.translatable("command.create_parachute.download.too_many",
+                    ParachuteConfig.DOWNLOAD_MAX_PENDING_FILES.get()));
+            return 0;
+        }
+        if (files == 0) {
             source.sendFailure(Component.translatable("command.create_parachute.download.missing", name));
             return 0;
         }
-        source.sendSuccess(() -> Component.translatable("command.create_parachute.download.sent", name, files), false);
+        source.sendSuccess(() -> Component.translatable("command.create_parachute.download.queued_one",
+                name, files), false);
         return files;
     }
 
+    /** 全部伞：逐个伞文件夹直接排队下发（不再打包 zip，落到玩家自己的 parachute/server/<存档UUID>/） */
     private static int downloadAll(CommandSourceStack source) throws CommandSyntaxException {
+        if (!allowDownload(source)) return 0;
         ServerPlayer player = source.getPlayerOrException();
-        List<String> ids = ParachuteManager.listParachuteIds();
+        if (ParachuteDownloads.isBusy(player)) {
+            source.sendFailure(Component.translatable("command.create_parachute.download.busy"));
+            return 0;
+        }
+        List<String> ids = ParachuteTransfer.listLibraryFolders();
         if (ids.isEmpty()) {
             source.sendFailure(Component.translatable("command.create_parachute.list.empty",
                     ParachuteManager.rootFolder().toString()));
             return 0;
         }
-        byte[] bundle = ParachuteTransfer.zipFolders(ids);
-        if (bundle == null || bundle.length == 0) {
-            source.sendFailure(Component.translatable("command.create_parachute.download.bundle_failed"));
+        int files = ParachuteDownloads.enqueue(player, ids);
+        if (files < 0) {
+            source.sendFailure(Component.translatable("command.create_parachute.download.too_many",
+                    ParachuteConfig.DOWNLOAD_MAX_PENDING_FILES.get()));
             return 0;
         }
-        ParachuteTransfer.sendFileToPlayer(player, "", ParachuteTransfer.BUNDLE_NAME, bundle);
-        final int count = ids.size();
-        final int bytes = bundle.length;
-        source.sendSuccess(() -> Component.translatable("command.create_parachute.download.all_sent",
-                ParachuteTransfer.BUNDLE_NAME, count, bytes), false);
-        return count;
+        final int chutes = ids.size();
+        final int fileCount = files;
+        source.sendSuccess(() -> Component.translatable("command.create_parachute.download.queued_all",
+                chutes, fileCount), false);
+        return chutes;
     }
 
     // ============================================================
-    // distribute —— 服务端 → 其他玩家
+    // distribute —— 服务端伞库 → 其他玩家（同样是分批队列）
     // ============================================================
 
     /**
-     * 分发服务端伞库。
+     * 分发服务端伞库（排进每个目标玩家自己的下载队列，由 tick 分批发送）。
      *
      * @param targets {@code null} = 服务器内所有在线玩家；否则只发给指定的这些玩家
      *                （参数用 {@link EntityArgument#players()}，所以 {@code @a}、{@code @p}、
      *                {@code @r}、玩家名、以及多人选择器都能用）
      */
     private static int distribute(CommandSourceStack source, @Nullable Collection<ServerPlayer> targets) {
-        List<String> ids = ParachuteManager.listParachuteIds();
+        List<String> ids = ParachuteTransfer.listLibraryFolders();
         if (ids.isEmpty()) {
             source.sendFailure(Component.translatable("command.create_parachute.list.empty",
                     ParachuteManager.rootFolder().toString()));
@@ -226,10 +270,13 @@ public final class ParachuteCommands {
             return 0;
         }
         int files = 0;
+        int skipped = 0;
         for (ServerPlayer player : resolved) {
-            for (String id : ids) {
-                int sent = ParachuteTransfer.sendFolderToPlayer(player, id);
-                if (sent > 0) files += sent;
+            int queued = ParachuteDownloads.enqueue(player, ids);
+            if (queued < 0) {
+                skipped++;
+            } else {
+                files += queued;
             }
         }
         final int playerCount = resolved.size();
@@ -242,6 +289,11 @@ public final class ParachuteCommands {
         } else {
             source.sendSuccess(() -> Component.translatable("command.create_parachute.distribute.done",
                     playerCount, chuteCount, fileCount), false);
+        }
+        if (skipped > 0) {
+            final int skippedCount = skipped;
+            source.sendSuccess(() -> Component.translatable("command.create_parachute.distribute.skipped",
+                    skippedCount), false);
         }
         return playerCount;
     }

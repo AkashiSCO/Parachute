@@ -6,8 +6,8 @@ Build a parachute onto your vehicle, deploy it with a redstone pulse, and glide 
 
 ## Features
 
-- Drop a folder into `<game root>/parachute/` containing a `.bbmodel` and a `.png`, and it shows up in the selection GUI instantly
-  - The built-in parachute is placed into the `parachute` folder automatically when the mod loads
+- Drop a folder into `<game root>/parachute/local/` containing a `.bbmodel` and a `.png`, and it shows up in the selection GUI instantly
+  - The built-in parachutes are placed into that folder automatically when the mod loads
   - Supports Java entity models and Bedrock edition models from BlockBench
 - **Controller GUI** (right-click the block or the pack):
   - **Drag** — drag coefficient of the canopy (higher = slows you down faster)
@@ -18,7 +18,32 @@ Build a parachute onto your vehicle, deploy it with a redstone pulse, and glide 
   - **Save / M / P / R / Lock** — apply settings, model offset, pivot offset, rotation, lock rotation
 - **Parachute selection GUI** — scrollable list of parachutes, open the game's `parachute/` folder in your file explorer
 - **Dye support** — recolor a placed parachute with any dye; restore the original with an axe
-- **Multiplayer** — parachutes the player doesn't have locally fall back to the default mushroom
+- **Multiplayer** — every server gets its own folder on your machine, so joining a server never mixes its parachutes with another server's or with your own; parachutes the player doesn't have fall back to the default mushroom
+
+## Folders
+
+```
+parachute/
+├─ local/<name>/…                       your own parachutes (edit these, and these are what /parachute upload sends)
+├─ server/<world uuid>/<name>/…         parachutes downloaded from that server (the uuid is generated per world save)
+└─ <name>/…                             the server library on a dedicated server, and your own library when you host a world
+```
+
+While connected to someone else's server, that server's folder wins over `local/`; in single-player or while hosting a LAN world, only `local/` is used.
+
+Server parachutes are shared with `/parachute`:
+
+| Command | Who | What it does |
+|---|---|---|
+| `/parachute list [page]` | everyone | list the parachutes in the server library |
+| `/parachute download [name]` | everyone | pull one parachute, or the whole library, into your own `parachute/server/<world uuid>/` |
+| `/parachute upload [name]` | OP | send your `parachute/local` parachute(s) to the server library |
+| `/parachute distribute [players]` | OP | queue the whole library for other players |
+| `/parachute delete [name]` | OP | delete from the server library (with a confirm button) |
+
+Downloads are queued per player and sent in batches (default 64 KiB per tick, `download.bytesPerTick` in the config), so a big library never floods a connection. `download.allowPlayerDownload` (default `true`) can restrict `list`/`download` to OPs.
+
+The per-server folder is named after a UUID the server stores in its world save (`<world>/create_parachute/server-id.txt`) and sends to clients on login, so a server keeps the same folder even if its address or port changes. Connecting to a server that doesn't have the mod falls back to `server/<address>/`.
 
 ## Requirements
 

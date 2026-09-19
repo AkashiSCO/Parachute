@@ -87,6 +87,10 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     private static final double MAX_DISCONNECT_SPEED = 5.0D;
     /** 开伞/收伞动画总帧数（同 Minecraft 1 tick = 1 帧，共 1 秒） */
     private static final int OPEN_ANIMATION_TICKS = 20;
+    /** 渲染缩放系数下限（再小基本看不见了） */
+    private static final double MIN_RENDER_SCALE = 0.05D;
+    /** 渲染缩放系数上限（再大纯属浪费） */
+    private static final double MAX_RENDER_SCALE = 20.0D;
 
     // ============================================================
     // 逐块可配置参数（通过 GUI 修改，非全局配置）
@@ -102,6 +106,8 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     private volatile boolean disconnectOnLowSpeed = false;
     /** 是否启用红石脉冲切伞：已开伞状态下收到红石信号时收伞 */
     private volatile boolean disconnectOnRedstonePulse = true;
+    /** 渲染整体缩放系数（相对枢轴点 = 模型自身原点），1.0 = 原始大小 */
+    private volatile float renderScale = 1.0F;
 
     // ============================================================
     // 部署状态
@@ -445,6 +451,15 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     /** @return 是否启用红石脉冲切伞 */
     public boolean isDisconnectOnRedstonePulse() { return this.disconnectOnRedstonePulse; }
 
+    /** @return 渲染整体缩放系数（相对枢轴点） */
+    public float getRenderScale() { return this.renderScale; }
+
+    /** 设置渲染整体缩放系数（钳在 {@link #MIN_RENDER_SCALE}~{@link #MAX_RENDER_SCALE}） */
+    public void setRenderScale(float scale) {
+        this.renderScale = (float) clamp(scale, MIN_RENDER_SCALE, MAX_RENDER_SCALE);
+        markDirty();
+    }
+
     public void setDragCoefficient(double k) { this.dragCoefficient = clamp(k, MIN_K, ParachuteConfig.MAX_DRAG_COEFFICIENT.get()); markDirty(); }
     public void setRotationalDragCoefficient(double k) { this.rotationalDragCoefficient = clamp(k, MIN_K, ParachuteConfig.MAX_ROTATIONAL_DAMP_COEFFICIENT.get()); markDirty(); }
     public void setDisconnectSpeedThreshold(double v) { this.disconnectSpeedThreshold = clamp(v, MIN_DISCONNECT_SPEED, MAX_DISCONNECT_SPEED); markDirty(); }
@@ -698,6 +713,7 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         tag.putFloat("OffX", this.offX);
         tag.putFloat("OffY", this.offY);
         tag.putFloat("OffZ", this.offZ);
+        tag.putFloat("Scale", this.renderScale);
     }
 
     /**
@@ -712,8 +728,24 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         this.rotationalDragCoefficient = clamp(tag.getDouble("RotationalDragCoefficient"), MIN_K, ParachuteConfig.MAX_ROTATIONAL_DAMP_COEFFICIENT.get());
         this.disconnectSpeedThreshold = clamp(tag.getDouble("DisconnectSpeedThreshold"), MIN_DISCONNECT_SPEED, MAX_DISCONNECT_SPEED);
         this.disconnectOnLowSpeed = tag.getBoolean("DisconnectOnLowSpeed");
-        this.disconnectOnRedstonePulse = tag.getBoolean("DisconnectOnRedstonePulse");
+        this.disconnectOnRedstonePulse = readRedstoneFlag(tag);
         readCommonTag(tag);
+    }
+
+    /**
+     * 读红石切伞开关。
+     *
+     * <p>这个字段历史上在两种标签里用过两个键名：落盘/常规用 {@code DisconnectOnRedstonePulse}，
+     * 同步标签曾经写 {@code DisconnectOnRedstone}。而 1.21 里 BE 同步包是
+     * {@code ClientboundBlockEntityDataPacket.create(this)}（用 {@link #getUpdateTag} 生成）
+     * 发出去，客户端却由 {@code IBlockEntityExtension#onDataPacket} → {@code loadWithComponents}
+     * → 本方法读取——<b>写和读走的是同一个标签，键名必须一致</b>，否则字段会静默变成 false。
+     * 这里两个键都认，兼容旧版本发来的标签。</p>
+     */
+    private static boolean readRedstoneFlag(CompoundTag tag) {
+        return tag.contains("DisconnectOnRedstonePulse")
+                ? tag.getBoolean("DisconnectOnRedstonePulse")
+                : tag.getBoolean("DisconnectOnRedstone");
     }
 
     /**
@@ -736,6 +768,9 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         tag.putDouble("RotationalDragCoefficient", this.rotationalDragCoefficient);
         tag.putDouble("DisconnectSpeedThreshold", this.disconnectSpeedThreshold);
         tag.putBoolean("DisconnectOnLowSpeed", this.disconnectOnLowSpeed);
+        // 必须和 loadAdditional 读的键名一致（客户端就是这个方法读同步标签）；
+        // 旧键 DisconnectOnRedstone 一并写上，兼容只认旧键的读取方
+        tag.putBoolean("DisconnectOnRedstonePulse", this.disconnectOnRedstonePulse);
         tag.putBoolean("DisconnectOnRedstone", this.disconnectOnRedstonePulse);
         tag.putBoolean("Dyed", this.dyed);
         tag.putInt("DyeColor", this.dyeColorARGB);
@@ -751,6 +786,7 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         tag.putFloat("OffX", this.offX);
         tag.putFloat("OffY", this.offY);
         tag.putFloat("OffZ", this.offZ);
+        tag.putFloat("Scale", this.renderScale);
         return tag;
     }
 
@@ -784,7 +820,7 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
             this.rotationalDragCoefficient = clamp(tag.getDouble("RotationalDragCoefficient"), MIN_K, ParachuteConfig.MAX_ROTATIONAL_DAMP_COEFFICIENT.get());
             this.disconnectSpeedThreshold = clamp(tag.getDouble("DisconnectSpeedThreshold"), MIN_DISCONNECT_SPEED, MAX_DISCONNECT_SPEED);
             this.disconnectOnLowSpeed = tag.getBoolean("DisconnectOnLowSpeed");
-            this.disconnectOnRedstonePulse = tag.getBoolean("DisconnectOnRedstone");
+            this.disconnectOnRedstonePulse = readRedstoneFlag(tag);
         }
     }
 
@@ -979,6 +1015,10 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         this.offX = tag.getFloat("OffX");
         this.offY = tag.getFloat("OffY");
         this.offZ = tag.getFloat("OffZ");
+        // 渲染缩放：缺省（老存档/老同步标签）回退 1.0，避免被当成 0 缩到看不见
+        this.renderScale = tag.contains("Scale")
+                ? (float) clamp(tag.getFloat("Scale"), MIN_RENDER_SCALE, MAX_RENDER_SCALE)
+                : 1.0F;
     }
 
     /**

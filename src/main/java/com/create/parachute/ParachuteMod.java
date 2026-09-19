@@ -4,8 +4,10 @@ import com.create.parachute.data.ParachuteManager;
 import com.create.parachute.network.ClientboundParachuteVelocityPayload;
 import com.create.parachute.network.ParachuteFileChunkPayload;
 import com.create.parachute.network.ParachuteUploadRequestPayload;
+import com.create.parachute.network.ServerIdentityPayload;
 import com.create.parachute.network.SyncParachuteConfigPayload;
 import com.create.parachute.network.SyncParachuteLockPayload;
+import com.create.parachute.network.SyncParachutePackPayload;
 import com.create.parachute.network.SyncParachuteSelectionPayload;
 import com.create.parachute.network.SyncParachuteTransformPayload;
 import com.create.parachute.registry.ModBlockEntities;
@@ -29,10 +31,10 @@ public class ParachuteMod {
         // 注册模组全局配置（COMMON 类型 → 主菜单 Mods → Parachute → Config 可调）
         container.registerConfig(ModConfig.Type.COMMON, ParachuteConfig.SPEC);
 
-        // 两端都要在游戏根目录创建 parachute/ 并导出内置伞：
-        // 客户端用它渲染（本地伞库，支持热加载），服务端用它当伞库
-        // （/parachute list|upload|download|distribute 读写的就是服务端的这个文件夹）。
-        ParachuteManager.ensureParachuteFolder();
+        // 确保服务端伞库 parachute/ 存在并导出内置伞（两端都跑：客户端上它同时是
+        // 自己开世界 / LAN 主机时的伞库）。客户端自己的 parachute/local 与
+        // parachute/server/<地址> 由 client.ClientParachuteScope 在客户端初始化时准备。
+        ParachuteManager.ensureServerLibrary();
 
         ModBlocks.BLOCKS.register(modEventBus);
         ModBlocks.ITEMS.register(modEventBus);
@@ -88,6 +90,16 @@ public class ParachuteMod {
                     }
                 }
         );
+        // 伞包方块模型显示/隐藏（控制器界面红键）：改的是 blockstate，全服同步
+        registrar.playToServer(
+                SyncParachutePackPayload.TYPE,
+                SyncParachutePackPayload.STREAM_CODEC,
+                (payload, context) -> {
+                    if (context.player() instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+                        SyncParachutePackPayload.handleServer(payload, serverPlayer);
+                    }
+                }
+        );
 
         // 伞文件传输：文件分片双向使用（谁收到就写进谁的 parachute/），
         // 服务端方向在 ParachuteFileChunkPayload.handle 里做 OP 校验。
@@ -101,6 +113,13 @@ public class ParachuteMod {
                 ParachuteUploadRequestPayload.TYPE,
                 ParachuteUploadRequestPayload.STREAM_CODEC,
                 ParachuteUploadRequestPayload::handle
+        );
+        // 服务端 → 客户端：这台服务器当前存档的唯一 UUID
+        // （客户端用它当 parachute/server/<UUID>/ 的文件夹名）
+        registrar.playToClient(
+                ServerIdentityPayload.TYPE,
+                ServerIdentityPayload.STREAM_CODEC,
+                ServerIdentityPayload::handleClient
         );
     }
 

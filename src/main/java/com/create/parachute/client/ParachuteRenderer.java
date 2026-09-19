@@ -26,6 +26,14 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
     public ParachuteRenderer(BlockEntityRendererProvider.Context context) {
     }
 
+    /**
+     * 伞的可见距离（格），来自 {@link ParachuteConfig#VIEW_DISTANCE}（0 = 用默认 512，上限 65536）。
+     *
+     * <p>原版用它做 {@code Vec3.closerThan(cameraPos, (double) distance)} 判断，double 运算，
+     * 所以 65536 这种大值不会溢出。真正决定能不能看见的还是区块有没有加载：伞是方块实体，
+     * 客户端的区块追踪范围之外根本没有这个实体，渲染器不会被调用（服务器那边的方向同步同理，
+     * 走的是 {@code sendToPlayersTrackingChunk}）。</p>
+     */
     @Override
     public int getViewDistance() {
         int dist = ParachuteConfig.VIEW_DISTANCE.get();
@@ -84,6 +92,11 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
         poseStack.mulPose(Axis.ZP.rotationDegrees(be.getRotZ()));
         // 枢轴点：模型位置偏移（旋转后施加，随旋转绕附着点摆动，输入多少移多少）
         poseStack.translate(be.getPivotX(), be.getPivotY(), be.getPivotZ());
+        // 整体缩放：在枢轴平移之后施加，等价于「以枢轴点（= 模型自身原点）为中心」缩放
+        float scale = be.getRenderScale();
+        if (scale != 1.0F) {
+            poseStack.scale(scale, scale, scale);
+        }
 
         // 有动画才驱动开伞动画；无动画直接显示模型
         if (parachute.openAnimation() != null) {

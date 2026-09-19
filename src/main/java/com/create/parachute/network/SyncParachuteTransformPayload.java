@@ -13,11 +13,12 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 
 /**
- * 客户端 → 服务端：设置伞面变换（旋转 / 枢轴 / 整体偏移），写入目标方块实体。
+ * 客户端 → 服务端：设置伞面变换（旋转 / 枢轴 / 整体偏移 / 整体缩放），写入目标方块实体。
  * <ul>
  *   <li>{@code mode == MODE_ROTATION}：X/Y/Z 旋转（度，自摆动坐标系）</li>
  *   <li>{@code mode == MODE_PIVOT}：X/Y/Z 枢轴偏移（模型相对枢轴的位置，格）</li>
  *   <li>{@code mode == MODE_OFFSET}：X/Y/Z 整体偏移（含放置自带偏移，格）</li>
+ *   <li>{@code mode == MODE_SCALE}：只用 {@code x} 作为整体缩放系数（相对枢轴点），y/z 忽略</li>
  * </ul>
  */
 public record SyncParachuteTransformPayload(BlockPos pos, int mode, float x, float y, float z)
@@ -26,6 +27,7 @@ public record SyncParachuteTransformPayload(BlockPos pos, int mode, float x, flo
     public static final int MODE_ROTATION = 0;
     public static final int MODE_PIVOT = 1;
     public static final int MODE_OFFSET = 2;
+    public static final int MODE_SCALE = 3;
 
     public static final Type<SyncParachuteTransformPayload> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath(ParachuteMod.MOD_ID, "sync_parachute_transform"));
@@ -54,11 +56,12 @@ public record SyncParachuteTransformPayload(BlockPos pos, int mode, float x, flo
                 case MODE_ROTATION -> pbe.setRotation(payload.x(), payload.y(), payload.z());
                 case MODE_PIVOT -> pbe.setPivot(payload.x(), payload.y(), payload.z());
                 case MODE_OFFSET -> pbe.setOffset(payload.x(), payload.y(), payload.z());
+                case MODE_SCALE -> pbe.setRenderScale(payload.x());
                 default -> {
                     return;
                 }
             }
-            // 旋转/枢轴/偏移是纯渲染参数，不动 blockstate，必须显式广播，否则其他玩家看不到
+            // 旋转/枢轴/偏移/缩放是纯渲染参数，不动 blockstate，必须显式广播，否则其他玩家看不到
             pbe.setChanged();
             pbe.syncToClients();
         }

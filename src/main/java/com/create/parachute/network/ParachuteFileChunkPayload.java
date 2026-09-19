@@ -1,6 +1,7 @@
 package com.create.parachute.network;
 
 import com.create.parachute.ParachuteMod;
+import com.create.parachute.data.ParachuteDownloads;
 import com.create.parachute.data.ParachuteTransfer;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -14,14 +15,17 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
  * 伞文件的一个分片，<b>双向</b>使用：谁收到包，就把内容写进谁自己的 {@code parachute/} 目录。
  *
  * <ul>
- *   <li>客户端 → 服务端：OP 上传本地伞（写进服务端伞库）</li>
- *   <li>服务端 → 客户端：下载 / 分发（写进玩家本地文件夹，热加载自动生效）</li>
+ *   <li>客户端 → 服务端：OP 上传本地 {@code parachute/local} 的伞（写进服务端伞库）</li>
+ *   <li>服务端 → 客户端：下载 / 分发（写进玩家本地对应的服务器文件夹，热加载自动生效）</li>
  * </ul>
+ *
+ * <p>服务端方向的下载是<b>分批</b>的：由 {@link ParachuteDownloads} 按每个玩家每 tick 的字节预算
+ * 逐段发送，所以同一个文件的分片可能跨很多 tick 到齐，但顺序仍然是严格连续的。</p>
  *
  * <p>服务端方向额外要求发送者是 OP（权限等级 2），否则直接丢弃——这是防止普通玩家往服务端写文件的
  * 唯一一道关口，所以校验放在解包的最前面。</p>
  *
- * @param folder     伞名（文件夹名）；空字符串表示直接放在 {@code parachute/} 根下（打包下载的 zip）
+ * @param folder     伞名（文件夹名）；空字符串表示直接放在目标根目录下（正常流程不用）
  * @param file       文件名
  * @param totalBytes 整个文件的总字节数（接收端用于判断是否收齐）
  * @param offset     本分片在文件中的起始偏移（接收端按此顺序拼接）

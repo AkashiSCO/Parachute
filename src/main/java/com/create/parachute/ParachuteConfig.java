@@ -44,7 +44,7 @@ public final class ParachuteConfig {
     /** 飘动 Z 轴频率倍率 */
     public static final ModConfigSpec.DoubleValue WOBBLE_Z_FREQ_MULT;
 
-    /** BER 渲染的最大可见距离（格） */
+    /** 伞的渲染器最大可见距离（格），上限 2^16 = 65536 */
     public static final ModConfigSpec.IntValue VIEW_DISTANCE;
 
     // ========== 物理 / 同步 ==========
@@ -72,6 +72,20 @@ public final class ParachuteConfig {
 
     /** 旋转阻尼系数的上限，限制 GUI 中 rotationalDragCoefficient 的最大值 */
     public static final ModConfigSpec.DoubleValue MAX_ROTATIONAL_DAMP_COEFFICIENT;
+
+    // ========== 服务器伞库下发 ==========
+
+    /** 是否允许普通玩家自己用 /parachute list|download 拉服务器伞库（关掉就只有 OP 能用） */
+    public static final ModConfigSpec.BooleanValue ALLOW_PLAYER_DOWNLOAD;
+
+    /**
+     * 每个玩家每 tick 最多下发多少字节（0 = 不限）。
+     * 下载是按队列分批发的：用时间换带宽，避免一次把整个伞库灌进连接。
+     */
+    public static final ModConfigSpec.IntValue DOWNLOAD_BYTES_PER_TICK;
+
+    /** 单个玩家最多能排多少个待发文件，防止刷指令把队列撑爆 */
+    public static final ModConfigSpec.IntValue DOWNLOAD_MAX_PENDING_FILES;
 
 
     public static final ModConfigSpec SPEC;
@@ -128,8 +142,13 @@ public final class ParachuteConfig {
                 .defineInRange("wobbleZFreqMult", 1.3D, 0.0D, 5.0D);
 
         VIEW_DISTANCE = b
-                .comment("降落伞实体渲染的最大可见距离（格），设为 0 则使用默认值")
-                .defineInRange("viewDistance", 512, 0, 1024);
+                .comment("伞（方块实体）渲染器的最大可见距离，单位格，上限 65536（2^16），设为 0 则用默认值 512。",
+                         "这是客户端自己的渲染设置；原版上限 1024 只是历史值，数学上 65536 完全安全",
+                         "（原版判断是 Vec3.closerThan(pos, (double) viewDistance)，double 运算不会溢出）。",
+                         "注意实际能看多远还受客户端区块加载距离限制：伞是方块实体，区块没加载就没有实体可渲染，",
+                         "所以原版设置下有效上限约等于客户端渲染距离（最高 32 区块 = 512 格），",
+                         "装了提高渲染距离/区块缓存的模组才能真正用到大数值。")
+                .defineInRange("viewDistance", 512, 0, 65536);
 
         b.pop();
 
@@ -166,6 +185,25 @@ public final class ParachuteConfig {
         MAX_ROTATIONAL_DAMP_COEFFICIENT = b
                 .comment("旋转阻尼系数上限。GUI 中 rotationalDragCoefficient 的最大值")
                 .defineInRange("maxRotationalDampCoefficient", 100_000.0D, 0.1D, 1_000_000.0D);
+
+        b.pop();
+
+        b.push("download");
+
+        ALLOW_PLAYER_DOWNLOAD = b
+                .comment("是否允许普通玩家自己用 /parachute list 和 /parachute download 拉服务器伞库。"
+                       + "false 时这两个子指令只有 OP（权限等级 2）能用；"
+                       + "上传、分发、删除始终需要 OP")
+                .define("allowPlayerDownload", true);
+
+        DOWNLOAD_BYTES_PER_TICK = b
+                .comment("每个玩家每 tick 最多下发多少字节（0 = 不限）。下载按队列分批发送，"
+                       + "用时间换带宽：64 KiB/tick 约等于 1.25 MiB/s，1.4 MB 的伞约 22 tick（1 秒多）传完")
+                .defineInRange("bytesPerTick", 65_536, 0, 1_048_576);
+
+        DOWNLOAD_MAX_PENDING_FILES = b
+                .comment("单个玩家最多排队多少个待发文件，超了就拒绝并要求改用单把下载，防止刷指令撑爆队列")
+                .defineInRange("maxPendingFiles", 512, 1, 8192);
 
         b.pop();
 

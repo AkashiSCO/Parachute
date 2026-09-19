@@ -21,8 +21,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
 
 /**
  * 伞文件传输层：服务端 ↔ 客户端之间搬 {@code parachute/<伞名>/<文件>}，以及本端文件夹读写。
@@ -36,9 +34,13 @@ import java.util.zip.ZipOutputStream;
  * <p>收发用的是同一个包类型（{@code playBidirectional}）：<b>谁收到包，就写进谁自己的游戏目录</b>。
  * 于是两个方向天然对称——</p>
  * <ul>
- *   <li>上传：OP 客户端发给服务端 → 服务端写进自己的 {@code parachute/}（服务端伞库）</li>
- *   <li>下载/分发：服务端发给客户端 → 客户端写进自己的 {@code parachute/}（本地热加载会自动生效）</li>
+ *   <li>上传：OP 客户端从 {@code parachute/local} 读文件发给服务端 → 服务端写进
+ *       {@code parachute/<伞名>/}（服务端伞库，布局不变）</li>
+ *   <li>下载/分发：服务端从伞库发给客户端 → 客户端按当前伞源落地：
+ *       单机/自己开的世界写 {@code parachute/local/<伞名>/}，
+ *       连别人的服务器写 {@code parachute/server/<服务器存档UUID>/<伞名>/}（热加载自动生效）</li>
  * </ul>
+ * <p>「当前伞源」见 {@link ParachuteScope}。</p>
  *
  * <h2>安全</h2>
  * <p>两端都会校验文件夹名/文件名（不含路径分隔符与 {@code ..}），并在拼接后再次确认目标路径仍在
@@ -50,18 +52,22 @@ public final class ParachuteTransfer {
     public static final int CHUNK_SIZE = 64 * 1024;
     /** 单文件大小上限，防止被封包塞满磁盘 */
     public static final int MAX_FILE_BYTES = 64 * 1024 * 1024;
-    /** 打包下载时的压缩包名（写到接收方 {@code parachute/} 目录下） */
-    public static final String BUNDLE_NAME = "server-parachute.zip";
 
     private static final int MAX_FOLDER_NAME_LENGTH = 64;
     private static final int MAX_FILE_NAME_LENGTH = 128;
     /** 同时进行的接收会话上限，防御性上限（正常时同一时刻只有 1~2 个文件在传） */
     private static final int MAX_SESSIONS = 64;
 
-    /** 正在接收的文件：key = 伞名 + '\0' + 文件名 */
+    /** 正在接收的文件：key = 伞源 + '\0' + 伞名 + '\0' + 文件名 */
     private static final Map<String, Incoming> INCOMING = new HashMap<>();
 
-    private record Incoming(int totalBytes, ByteArrayOutputStream buffer) {
+    /**
+     * 一个接收会话。
+     *
+     * @param root 目标伞源根目录，<b>在收到第一个分片时就定下来</b>——玩家中途换服务器/切存档时，
+     *             已经开传的这笔仍然写回它开始时那个文件夹，不会被写到另一个服务器名下
+     */
+    private record Incoming(int totalBytes, ByteArrayOutputStream buffer, Path root) {
     }
 
     private ParachuteTransfer() {
@@ -122,14 +128,30 @@ public final class ParachuteTransfer {
     // 本端文件夹读取
     // ============================================================
 
-    /** 本端游戏目录下的 {@code parachute/}（不存在则创建） */
+    /**
+     * 本端<b>自己</b>的伞文件夹 {@code parachute/local}——{@code /parachute upload} 的读取来源
+     * （玩家的伞在自己客户端上，服务端读不到，所以由客户端读这里再传上去）。
+     */
     public static Path localRoot() {
-        return ParachuteManager.rootFolder();
+        return ParachuteManager.localPath();
     }
 
-    /** 本端所有伞名（含 {@code .bbmodel} 的子文件夹，排序） */
+    /**
+     * <b>服务端伞库</b> {@code parachute/}——{@code /parachute list|download|distribute|delete}
+     * 读写的就是它，布局和以前完全一样（伞名文件夹直接放在 {@code parachute/} 下）。
+     */
+    public static Path libraryRoot() {
+        return ParachuteManager.rootPath();
+    }
+
+    /** 本端 {@code parachute/local} 里的伞名（上传用） */
     public static List<String> listLocalFolders() {
-        return ParachuteManager.listParachuteIds();
+        return ParachuteManager.listParachuteIds(localRoot());
+    }
+
+    /** 服务端伞库里的伞名（下载/分发用；实际发送走 {@link ParachuteDownloads}） */
+    public static List<String> listLibraryFolders() {
+        return ParachuteManager.listParachuteIds(libraryRoot());
     }
 
     /** 某个伞文件夹里的常规文件（不递归，按文件名排序） */
@@ -147,7 +169,8 @@ public final class ParachuteTransfer {
         return files;
     }
 
-    private static byte[] readFileOrNull(Path file) {
+    /** 读一个文件的全部字节；失败返回 null（分批下载队列也用它，所以是 public） */
+    public static byte[] readFileOrNull(Path file) {
         try {
             return Files.readAllBytes(file);
         } catch (IOException e) {
@@ -161,7 +184,8 @@ public final class ParachuteTransfer {
     // ============================================================
 
     /**
-     * 把一个文件按 {@link #CHUNK_SIZE} 切片投递出去。
+     * 把一个文件按 {@link #CHUNK_SIZE} 切片<b>一次性</b>投递出去（上传用；服务端下发走
+     * {@link ParachuteDownloads} 的分批队列，用 {@link #sendChunk}）。
      *
      * @param sink 决定发往哪端：客户端用 {@code PacketDistributor::sendToServer}，
      *             服务端用 {@code p -> PacketDistributor.sendToPlayer(player, p)}
@@ -177,15 +201,28 @@ public final class ParachuteTransfer {
         int chunks = 0;
         for (int offset = 0; offset < total; offset += CHUNK_SIZE) {
             int length = Math.min(CHUNK_SIZE, total - offset);
-            byte[] slice = Arrays.copyOfRange(data, offset, offset + length);
-            boolean last = offset + length >= total;
-            sink.accept(new ParachuteFileChunkPayload(safeFolder, file, total, offset, slice, last));
+            sendChunk(folder, file, data, offset, length, offset + length >= total, sink);
             chunks++;
         }
         return chunks;
     }
 
-    /** 把本端某个伞文件夹发给服务端（OP 上传）。返回文件数，找不到该伞返回 -1 */
+    /**
+     * 发一个文件里指定的一段（分批下载的队列用：每个 tick 只发预算允许的那么多字节）。
+     *
+     * @param offset 本段在文件里的起始偏移（接收端按它拼接，必须严格连续）
+     * @param length 本段字节数（可以小于 {@link #CHUNK_SIZE}）
+     * @param last   是否是这个文件的最后一段
+     */
+    public static void sendChunk(String folder, String file, byte[] data, int offset, int length, boolean last,
+                                 Consumer<ParachuteFileChunkPayload> sink) {
+        String safeFolder = folder == null ? "" : folder;
+        byte[] slice = Arrays.copyOfRange(data, offset, offset + length);
+        sink.accept(new ParachuteFileChunkPayload(safeFolder, file, data.length, offset, slice, last));
+    }
+
+    /** 把本端 {@code parachute/local} 里的某个伞文件夹发给服务端（OP 上传，服务端写进伞库）。
+     *  返回文件数，本地找不到该伞返回 -1 */
     public static int uploadFolderToServer(String folderName) {
         Path dir = localRoot().resolve(folderName);
         if (!Files.isDirectory(dir)) return -1;
@@ -203,7 +240,7 @@ public final class ParachuteTransfer {
         return count;
     }
 
-    /** 把本端全部伞发给服务端（OP 上传全部）。返回文件总数 */
+    /** 把本端 {@code parachute/local} 里全部伞发给服务端（OP 上传全部）。返回文件总数 */
     public static int uploadAllToServer() {
         int total = 0;
         for (String id : listLocalFolders()) {
@@ -213,77 +250,21 @@ public final class ParachuteTransfer {
         return total;
     }
 
-    /** 把一个伞文件夹发给某个玩家（下载/分发）。返回文件数，服务端没有该伞返回 -1 */
-    public static int sendFolderToPlayer(ServerPlayer player, String folderName) {
-        Path dir = localRoot().resolve(folderName);
-        if (!Files.isDirectory(dir)) return -1;
-        int count = 0;
-        for (Path file : listFolderFiles(dir)) {
-            byte[] data = readFileOrNull(file);
-            if (data == null || data.length > MAX_FILE_BYTES) continue;
-            sendFile(folderName, file.getFileName().toString(), data, p -> PacketDistributor.sendToPlayer(player, p));
-            count++;
-        }
-        return count;
-    }
-
-    /** 把服务端全部伞发给某个玩家（逐个伞文件夹，落地就是可用的 {@code parachute/<伞名>/}）。返回文件总数 */
-    public static int sendAllToPlayer(ServerPlayer player) {
-        int total = 0;
-        for (String id : listLocalFolders()) {
-            int n = sendFolderToPlayer(player, id);
-            if (n > 0) total += n;
-        }
-        return total;
-    }
-
-    /** 把一个现成的文件发给某个玩家（打包下载的 zip 用；{@code folder} 为空表示放在 parachute/ 根下） */
-    public static int sendFileToPlayer(ServerPlayer player, String folder, String fileName, byte[] data) {
-        return sendFile(folder, fileName, data, p -> PacketDistributor.sendToPlayer(player, p));
-    }
-
-    /**
-     * 把指定的若干伞文件夹打包成一个 zip（{@code <伞名>/<文件>} 结构）。
-     *
-     * @return zip 字节；失败返回 null
-     */
-    public static byte[] zipFolders(List<String> folders) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        Path root = localRoot();
-        try (ZipOutputStream zip = new ZipOutputStream(out)) {
-            for (String id : folders) {
-                Path dir = root.resolve(id);
-                if (!Files.isDirectory(dir)) continue;
-                for (Path file : listFolderFiles(dir)) {
-                    byte[] data = readFileOrNull(file);
-                    if (data == null) continue;
-                    zip.putNextEntry(new ZipEntry(id + "/" + file.getFileName()));
-                    zip.write(data);
-                    zip.closeEntry();
-                }
-            }
-        } catch (IOException e) {
-            ParachuteMod.LOGGER.warn("[transfer] failed to build bundle: {}", e.toString());
-            return null;
-        }
-        return out.toByteArray();
-    }
-
     // ============================================================
     // 删除（仅服务端指令调用）
     // ============================================================
 
     /**
-     * 递归删除本端某个伞文件夹（{@code parachute/<伞名>/} 整棵树）。
+     * 递归删除<b>服务端伞库</b>里的某个伞文件夹（{@code parachute/<伞名>/} 整棵树）。
      *
-     * <p>与接收路径用同一套校验：名字必须合法，且归一化后仍在本端 {@code parachute/} 之内，
+     * <p>与接收路径用同一套校验：名字必须合法，且归一化后仍在伞库之内，
      * 绝不会删到目录外（也不会删掉 {@code parachute/} 根目录本身）。</p>
      *
      * @return 删除的文件数；伞名非法、目录不存在或删除失败返回 -1
      */
     public static int deleteParachute(String folderName) {
         if (!isValidFolderName(folderName)) return -1;
-        Path root = localRoot().normalize();
+        Path root = libraryRoot().normalize();
         Path dir = root.resolve(folderName).normalize();
         if (dir.equals(root) || !dir.startsWith(root) || !Files.isDirectory(dir)) return -1;
         int files = 0;
@@ -306,9 +287,17 @@ public final class ParachuteTransfer {
     // ============================================================
 
     /**
-     * 收到一个分片：按 {@code offset} 顺序拼接，最后一片落盘到本端的 {@code parachute/}。
+     * 收到一个分片：按 {@code offset} 顺序拼接，最后一片落盘。
      *
-     * @param flow 包的流向（{@code SERVERBOUND} = 有人在上传；{@code CLIENTBOUND} = 下载/分发到本地）
+     * <p>落点由流向决定：</p>
+     * <ul>
+     *   <li>{@code SERVERBOUND}（有人在上传）→ 服务端伞库 {@code parachute/<伞名>/}，布局不变</li>
+     *   <li>{@code CLIENTBOUND}（下载/分发）→ 当前伞源（{@link ParachuteScope}）：
+     *       单机/自己开的世界是 {@code parachute/local/<伞名>/}，
+     *       连别人的服务器是 {@code parachute/server/<服务器存档UUID>/<伞名>/}</li>
+     * </ul>
+     *
+     * @param flow 包的流向
      */
     public static void receiveChunk(ParachuteFileChunkPayload payload, PacketFlow flow) {
         String folder = payload.folder() == null ? "" : payload.folder();
@@ -328,7 +317,20 @@ public final class ParachuteTransfer {
             ParachuteMod.LOGGER.warn("[transfer] too many concurrent transfers, sessions reset");
         }
 
-        String key = folder + '\0' + file;
+        // 上传永远写服务端伞库；下载/分发写「当前伞源」，伞源名进 key，
+        // 这样从不同服务器下来的同名文件是两个互不干扰的会话
+        final Path root;
+        final String scopeKey;
+        if (flow == PacketFlow.SERVERBOUND) {
+            root = libraryRoot();
+            scopeKey = "library";
+        } else {
+            ParachuteScope.Source scope = ParachuteScope.clientScope();
+            root = scope.root();
+            scopeKey = scope.label();
+        }
+
+        String key = scopeKey + '\0' + folder + '\0' + file;
         Incoming session = INCOMING.get(key);
         if (session == null) {
             if (payload.offset() != 0) {
@@ -336,7 +338,8 @@ public final class ParachuteTransfer {
                 ParachuteMod.LOGGER.warn("[transfer] chunk without session '{}/{}' offset={}", folder, file, payload.offset());
                 return;
             }
-            session = new Incoming(payload.totalBytes(), new ByteArrayOutputStream(Math.min(payload.totalBytes(), CHUNK_SIZE)));
+            session = new Incoming(payload.totalBytes(),
+                    new ByteArrayOutputStream(Math.min(payload.totalBytes(), CHUNK_SIZE)), root);
             INCOMING.put(key, session);
         } else if (payload.offset() != session.buffer().size()) {
             INCOMING.remove(key);
@@ -358,12 +361,12 @@ public final class ParachuteTransfer {
         INCOMING.remove(key);
         byte[] data = session.buffer().toByteArray();
         try {
-            Path target = resolveTarget(localRoot(), folder, file);
+            Path target = resolveTarget(session.root(), folder, file);
             Files.createDirectories(target.getParent());
             Files.write(target, data);
-            ParachuteMod.LOGGER.info("[transfer] {} {}/{} ({} bytes)",
-                    flow == PacketFlow.SERVERBOUND ? "stored" : "written",
-                    folder.isEmpty() ? "." : folder, file, data.length);
+            String where = scopeKey + "/" + (folder.isEmpty() ? "" : folder + "/") + file;
+            ParachuteMod.LOGGER.info("[transfer] {} {} ({} bytes)",
+                    flow == PacketFlow.SERVERBOUND ? "stored" : "written", where, data.length);
         } catch (Exception e) {
             ParachuteMod.LOGGER.warn("[transfer] failed to write '{}/{}': {}", folder, file, e.toString());
         }
