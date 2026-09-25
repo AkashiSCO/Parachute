@@ -2,6 +2,7 @@ package com.create.parachute.network;
 
 import com.create.parachute.ParachuteMod;
 import com.create.parachute.data.ParachuteManager;
+import com.create.parachute.data.ParachuteTransfer;
 import com.create.parachute.parachute.ParachuteBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
@@ -16,6 +17,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * 客户端 → 服务端：请求把选中的伞名写入目标。
@@ -51,8 +53,11 @@ public record SyncParachuteSelectionPayload(BlockPos pos, String name) implement
 
     public static void handleServer(SyncParachuteSelectionPayload payload, ServerPlayer player) {
         String name = sanitize(payload.name());
-        if (name == null) return;
-
+        if (name == null) {
+            ParachuteMod.LOGGER.warn("[selection] rejected parachute name '{}' from {}",
+                    payload.name(), player.getName().getString());
+            return;
+        }
         if (payload.pos() != null) {
             Level level = player.level();
             if (level == null) return;
@@ -77,17 +82,18 @@ public record SyncParachuteSelectionPayload(BlockPos pos, String name) implement
         }
     }
 
-    /** 校验伞名：只能含字母数字下划线（文件夹名），限长 64 */
-    private static String sanitize(String name) {
+    /**
+     * 校验伞名：伞名就是磁盘上的<b>文件夹名</b>，所以规则必须和
+     * {@link ParachuteTransfer#isValidFolderName} 一致 —— 只禁路径分隔符、Windows 保留字符和控制字符，限长 64。
+     *
+     * <p>这里以前只允许 {@code [A-Za-z0-9_]}，于是 {@code AH-64D_BLK.II}、{@code big-parachute.v2}
+     * 这类完全合法的文件夹名会被<b>静默丢弃</b>，症状是"GUI 里选中了、世界里却没变"
+     * （继续渲染成默认蘑菇伞）；其他纯小写字母数字的伞名不受影响，所以很容易看漏。</p>
+     */
+    @Nullable
+    private static String sanitize(@Nullable String name) {
         if (name == null) return null;
         String n = name.trim();
-        if (n.isEmpty() || n.length() > 64) return null;
-        for (int i = 0; i < n.length(); i++) {
-            char c = n.charAt(i);
-            if (!(Character.isLetterOrDigit(c) || c == '_')) {
-                return null;
-            }
-        }
-        return n;
+        return ParachuteTransfer.isValidFolderName(n) ? n : null;
     }
 }

@@ -1,4 +1,4 @@
-# Create:Parachute (1.1.2)
+# Create:Parachute (1.1.3)
 
 A parachute mod for **Create** and **Sable physics**.
 
@@ -6,9 +6,19 @@ Build a parachute onto your vehicle, deploy it with a redstone pulse, and glide 
 
 ## Features
 
-- Drop a folder into `<game root>/parachute/local/` containing a `.bbmodel` and a `.png`, and it shows up in the selection GUI instantly
+- Drop a folder into `<game root>/parachute/local/` and it shows up in the selection GUI instantly
   - The built-in parachutes are placed into that folder automatically when the mod loads
-  - Supports Java entity models and Bedrock edition models from BlockBench
+  - **BlockBench**: `<name>.bbmodel` + `.png` — Java entity models and Bedrock edition models
+  - **Blender / OBJ**: `<name>.obj` + `<name>.mtl` + `textures/*.png`, exported with Blender's default
+    OBJ settings (**Forward: -Z, Up: Y**, scale 1 unit = 1 block, origin at the attach point).
+    Recommended: enable *Geometry → Triangulated Mesh* on export (n-gons are fan-triangulated otherwise,
+    which is wrong for concave faces), and give each part its own object (`o`) — every object becomes a
+    bone, so parts can later be driven by an animation.
+    If both a `.bbmodel` and a `.obj` exist in the folder, the `.bbmodel` wins.
+  - **Performance**: models with 20k+ triangles (the OBJ ones) are baked into GPU vertex buffers when
+    they load, so a 980k-triangle model draws at 60+ fps instead of ~9. Results are per-layer identical to
+    the normal path (light and dye are baked per variant); pass `-Dparachute.debug.nogpu=true` to compare
+    against per-frame emission.
 - **Controller GUI** (right-click the block or the pack):
   - **Drag** — drag coefficient of the canopy (higher = slows you down faster)
   - **RotDrag** — rotational damping (higher = spins stop faster)

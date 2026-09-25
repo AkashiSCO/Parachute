@@ -3,15 +3,19 @@ package com.create.parachute.client;
 import com.create.parachute.ParachuteConfig;
 import com.create.parachute.client.assets.ParachuteAssets;
 import com.create.parachute.client.assets.ParachuteAssets.BakedParachute;
+import com.create.parachute.client.assets.obj.ObjGpuMesh;
 import com.create.parachute.parachute.ParachuteBlockEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
+import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 import org.joml.Vector3f;
 
 /**
@@ -21,7 +25,10 @@ import org.joml.Vector3f;
  */
 public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEntity> {
 
-    private final Vector3f animationCache = new Vector3f();
+    /** 渲染包围盒的最小膨胀量（格）：拿不到模型半径（bbmodel 等）时用这个兜底 */
+    private static final double RENDER_BOX_MIN = 16.0D;
+
+    private static final Vector3f ANIMATION_CACHE = new Vector3f();
 
     public ParachuteRenderer(BlockEntityRendererProvider.Context context) {
     }
@@ -40,20 +47,79 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
         return dist > 0 ? dist : 512;
     }
 
+    /**
+     * <b>这才是"转身模型就消失"的真正开关。</b>
+     *
+     * <p>NeoForge 在 {@code LevelRenderer} 的方块实体渲染循环里插了一个可见性判断
+     * （{@code ClientHooks.isBlockEntityRendererVisible}），它的实现是：</p>
+     * <pre>
+     *   renderer != null &amp;&amp; frustum.isVisible(renderer.getRenderBoundingBox(be))
+     * </pre>
+     * <p>也就是说剔除用的是<b>渲染器自己的渲染包围盒</b>，而默认值只有方块那 1x1x1 的体积。
+     * 伞的模型远大于方块（AH-64D 16 格长），于是"方块一离开视野 → 整个模型消失"，
+     * 而且 {@link #shouldRenderOffScreen} / {@link #shouldRender} 都不在这个判断里，
+     * 怎么改都没用（实测日志证实：转身后 render() 根本不会被调用）。</p>
+     *
+     * <p>这里给一个覆盖整个模型的盒子（按模型自己的几何半径算，见
+     * {@link ParachuteAssets.BakedParachute#renderRadius()}），等价于取消视锥剔除；真正的限制仍然是
+     * "方块实体所在区块有没有加载"。拿不到半径时用 {@link #RENDER_BOX_MIN} 兜底。</p>
+     */
+    @Override
+    public AABB getRenderBoundingBox(ParachuteBlockEntity be) {
+        BakedParachute parachute = ParachuteAssets.get(be.getParachuteName());
+        double radius = RENDER_BOX_MIN;
+        if (parachute != null && parachute.renderRadius() > 0.0F) {
+            // 模型绕枢轴旋转/摆动，所以用"球半径"（旋转无关）；再把枢轴和整体偏移算进去，保守但不会切掉模型
+            radius = parachute.renderRadius() * Math.max(0.001F, be.getRenderScale())
+                    + Math.abs(be.getPivotX()) + Math.abs(be.getPivotY()) + Math.abs(be.getPivotZ())
+                    + Math.abs(be.getOffX()) + Math.abs(be.getOffY()) + Math.abs(be.getOffZ())
+                    + 1.0D;
+        }
+        return new AABB(be.getBlockPos()).inflate(Math.max(RENDER_BOX_MIN, radius));
+    }
+
+    /**
+     * 走原版「全局方块实体」通道（和信标光柱同一个机制），绕开按区块的 section 剔除。
+     *
+     * <p>配合 {@link #getRenderBoundingBox} 一起用：前者管 section 级剔除，后者管 NeoForge
+     * 那个按渲染包围盒的视锥判断。</p>
+     */
+    @Override
+    public boolean shouldRenderOffScreen(ParachuteBlockEntity be) {
+        return true;
+    }
+
+    /**
+     * 强制渲染：不按距离剔除。
+     *
+     * <p>默认实现是"距相机超过 {@link #getViewDistance()} 就不画"，这里永远返回 true。
+     * 真正决定"有没有东西可画"的还是客户端区块加载：区块没加载时客户端根本没有这个方块实体。</p>
+     */
+    @Override
+    public boolean shouldRender(ParachuteBlockEntity be, Vec3 cameraPos) {
+        return true;
+    }
+
     @Override
     public void render(ParachuteBlockEntity be, float partialTick, PoseStack poseStack,
                        MultiBufferSource buffer, int packedLight, int packedOverlay) {
+        renderModel(be, partialTick, poseStack, buffer, packedLight, packedOverlay);
+    }
+
+    /**
+     * 真正的绘制主体：方块实体渲染器和 {@link ParachuteWorldRenderer} 的兜底绘制共用，
+     * 保证两条路径画出来的东西完全一致。
+     */
+    public static void renderModel(ParachuteBlockEntity be, float partialTick, PoseStack poseStack,
+                                   MultiBufferSource buffer, int packedLight, int packedOverlay) {
         if (!be.isDeployed()) return;
 
         BakedParachute parachute = ParachuteAssets.get(be.getParachuteName());
-        if (parachute == null || parachute.texture() == null) return;
+        if (parachute == null || !parachute.hasTexture()) return;
 
         int brightLight = packedLight == 0 ? 0xF000F0 : packedLight;
         // 已染色：运行时生成的白色底贴图 + 染料 ARGB；未染色：文件夹里的原贴图（不染色）
         boolean dyed = be.isDyed();
-        ResourceLocation tex = dyed
-                ? (parachute.whiteTexture() != null ? parachute.whiteTexture() : parachute.texture())
-                : parachute.texture();
         int color = dyed ? be.getDyeColorARGB() : -1;
 
         float ox = be.getFacingOffsetX();
@@ -72,7 +138,6 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
         boolean big = id != null && id.toLowerCase(java.util.Locale.ROOT).contains("big");
         float wobbleZAmp = (big ? ParachuteConfig.WOBBLE_Z_AMP_BIG : ParachuteConfig.WOBBLE_Z_AMP_SMALL).get().floatValue();
 
-        VertexConsumer vc = buffer.getBuffer(RenderType.entityCutoutNoCull(tex));
         poseStack.pushPose();
         poseStack.translate(0.5f + ox * dist, 0.5f + oy * dist, 0.5f + oz * dist);
         // 整体偏移：整体平移（旋转前施加，输入多少移多少）
@@ -100,10 +165,46 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
 
         // 有动画才驱动开伞动画；无动画直接显示模型
         if (parachute.openAnimation() != null) {
-            ParachuteAssets.applyOpenAnimation(
-                    parachute.root(), parachute.openAnimation(), ratio, this.animationCache);
+            ModelPart root = parachute.root();
+            if (root != null) {
+                ParachuteAssets.applyOpenAnimation(root, parachute.openAnimation(), ratio, ANIMATION_CACHE);
+            }
         }
-        parachute.root().render(poseStack, vc, brightLight, packedOverlay, color);
+        // 逐层渲染：单贴图模型只有一层（等价于以前的一次 render），多材质 OBJ 每张贴图一层
+        for (ParachuteAssets.Layer layer : parachute.layers()) {
+            ResourceLocation layerTex = dyed
+                    ? (layer.whiteTexture() != null ? layer.whiteTexture() : layer.texture())
+                    : layer.texture();
+            if (layerTex == null) {
+                continue;
+            }
+            // mtl 的 d（整体不透明度）用顶点 alpha 表达
+            int layerColor = color;
+            if (layer.alpha() < 1.0F) {
+                int a = Math.round(((color >>> 24) & 0xFF) * layer.alpha());
+                layerColor = (color & 0x00FFFFFF) | (a << 24);
+            }
+            if (layer.gpu() != null) {
+                // 高面数模型：顶点常驻显存，这里只 bind + draw（光照/染色烘在缓冲里，行为和逐帧发射一致）
+                layer.gpu().get(brightLight, layerColor).draw(poseStack, layerTex, layer.translucent());
+                continue;
+            }
+            if (layer.model() == null) {
+                continue;
+            }
+            // 不透明层：entityCutoutNoCull —— 不剔除背面。
+            //   DCS 转换出来的 OBJ 绕序经常不一致（同一模型里外壳/内壳、单面片混在一起），
+            //   一旦剔除就会出现"整片外壳消失、只剩骨架"（从某些角度看特别明显），
+            //   所以不透明层一律不剔除（代价是重合几何可能 z-fighting，由贴图 mipmap 掩盖一部分）。
+            // 半透明层：entityTranslucentCull —— 保留剔除。
+            //   玻璃球罩这类闭合壳体不剔除时，正面/背面/内层几何会叠在一起混合，
+            //   看起来就是"一大堆三角锯齿"（这就是光瞄那个问题的成因）。
+            VertexConsumer layerVc = buffer.getBuffer(layer.translucent()
+                    ? RenderType.entityTranslucentCull(layerTex)
+                    : RenderType.entityCutoutNoCull(layerTex));
+            layer.model().render(poseStack, layerVc, brightLight, packedOverlay, layerColor);
+        }
+
         poseStack.popPose();
     }
 }
