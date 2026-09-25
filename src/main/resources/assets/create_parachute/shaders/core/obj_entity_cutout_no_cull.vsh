@@ -14,14 +14,15 @@ uniform sampler2D Sampler1;
 uniform sampler2D Sampler2;
 
 uniform mat4 ModelViewMat;
+// 烘焙缓冲里的 Normal 是**模型空间**的，用「只含物体姿态」的矩阵转到世界空间，
+// 和 MC 给 Light0/Light1_Direction 的空间一致（不能用 ModelViewMat —— 含相机旋转）。
+uniform mat4 ObjNormalMat;
 uniform mat4 ProjMat;
 uniform int FogShape;
 
-uniform vec3 Light0_Direction;
-uniform vec3 Light1_Direction;
-
 out float vertexDistance;
-out vec4 vertexColor;
+out vec3 normalWorld;
+out vec4 rawColor;
 out vec4 lightMapColor;
 out vec4 overlayColor;
 out vec2 texCoord0;
@@ -30,7 +31,8 @@ void main() {
     gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);
 
     vertexDistance = fog_distance((ModelViewMat * vec4(Position, 1.0)).xyz, FogShape);
-    vertexColor = minecraft_mix_light(Light0_Direction, Light1_Direction, normalize(mat3(ModelViewMat) * Normal), Color);
+    normalWorld = normalize(mat3(ObjNormalMat) * Normal);
+    rawColor = Color;
     lightMapColor = texelFetch(Sampler2, UV2 / 16, 0);
     overlayColor = texelFetch(Sampler1, UV1, 0);
     texCoord0 = UV0;

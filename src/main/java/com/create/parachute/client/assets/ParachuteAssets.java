@@ -1,8 +1,10 @@
 package com.create.parachute.client.assets;
 
+import com.create.parachute.ParachuteConfig;
 import com.create.parachute.ParachuteMod;
 import com.create.parachute.client.assets.obj.ObjGpuCache;
 import com.create.parachute.client.assets.obj.ObjMesh;
+import com.create.parachute.client.assets.obj.ObjMeshCube;
 import com.create.parachute.client.assets.obj.ObjModelBuilder;
 import com.create.parachute.client.assets.obj.ObjParser;
 import com.create.parachute.data.ParachuteManager;
@@ -253,6 +255,7 @@ public final class ParachuteAssets {
         }
         lastScan = now;
 
+
         // 按优先级收集：同名伞只保留优先级最高的那一个
         Map<String, Entry> found = new LinkedHashMap<>();
         for (ParachuteScope.Source source : activeSources()) {
@@ -459,33 +462,51 @@ public final class ParachuteAssets {
         ObjParser.ObjData data = ObjParser.parse(objFile);
         if (data == null) return null;
 
-        ObjMesh mesh = ObjMesh.bake(data, OBJ_UNIT_SCALE);
+        ObjMesh mesh = ObjMesh.bake(data, OBJ_UNIT_SCALE, ParachuteConfig.OBJ_SMOOTH_ANGLE.get());
         if (mesh.triangleCount() <= 0) {
             ParachuteMod.LOGGER.warn("OBJ parachute '{}/{}' has no usable triangle ({} face(s) dropped)",
                     source, id, data.droppedFaces);
             return null;
         }
 
-        // 主贴图（兜底）：mtl 里第一个能解析到的 map_Kd，或 textures/ 里名字最小的图片
-        Path primary = findObjPng(dir, data.materials);
+        // 只有当**整个模型一个 map_Kd 都没有**时，才退回"textures/ 里名字最小的图片"给所有组用
+        // （有些模型是"一张图 + 没写 mtl"，这样还能用）；只要模型里有贴图，没写 map_Kd 的材质
+        // 就必须当成"无贴图材质"用它自己的 Kd 上色 —— 否则会去借别的材质的贴图，
+        // 典型症状就是玻璃上出现别的零件贴图里的文字（AH-64D 的玻璃就糊上了 dispenser 的 WARNING 字样）。
+        boolean anyMapped = false;
+        for (ObjParser.Material m : data.materials.values()) {
+            if (m.diffuse() != null) {
+                anyMapped = true;
+                break;
+            }
+        }
+        Path fallbackTexture = anyMapped ? null : firstPng(dir.resolve(TEXTURE_DIR));
+        if (fallbackTexture == null && !anyMapped) {
+            fallbackTexture = firstPng(dir);
+        }
 
-        // 每个 (材质,对象) 组 → 它该用哪张图 + 透明度；按 (albedo, 遮罩, d) 合并成层
+        // 每个 (材质,对象) 组 → 它该用哪张图（或纯色）+ 透明度；按 (albedo, 遮罩, d) 合并成层
         Map<String, LayerSpec> byKey = new LinkedHashMap<>();
         int noMaterialMap = 0;
+        java.util.Set<Integer> noMapColors = new java.util.LinkedHashSet<>();
         for (ObjMesh.Group group : mesh.groups()) {
             ObjParser.Material material = data.materials.getOrDefault(group.material(), ObjParser.Material.DEFAULT);
             Path albedo = resolveImage(dir, material.diffuse());
             if (albedo == null) {
-                albedo = primary;
-                noMaterialMap++;
+                albedo = fallbackTexture;
             }
-            if (albedo == null) continue;
+            if (albedo == null) {
+                // 没有贴图 → 用材质的 Kd 纯色（DCS 玻璃就是这种：illum 9 + Kd 0,0,0 + d 0.1，不引用任何图）
+                noMaterialMap++;
+                noMapColors.add(material.solidRgb());
+            }
             Path mask = resolveImage(dir, material.alphaMask());
-            String key = albedo + "\u0000" + (mask == null ? "" : mask.toString())
+            String key = (albedo == null ? "solid#" + Integer.toHexString(material.solidRgb()) : albedo.toString())
+                    + "\u0000" + (mask == null ? "" : mask.toString())
                     + "\u0000" + Math.round(material.dissolve() * 255.0F);
             LayerSpec spec = byKey.get(key);
             if (spec == null) {
-                spec = new LayerSpec(albedo, mask, material.dissolve());
+                spec = new LayerSpec(albedo, mask, material.dissolve(), material.solidRgb());
                 byKey.put(key, spec);
             }
             spec.groups.add(group);
@@ -498,20 +519,27 @@ public final class ParachuteAssets {
         }
 
         boolean singleLayer = byKey.size() == 1;
+        // 逐帧发射路径（低面数模型）的几何份数：和 GPU 路径用同一个配置，保证两条路径外观一致。
+        // 但这条路径没有自有着色器（用的是原版 RenderType），所以"一份"时只能配剔除背面
+        // （entityCutout / entityTranslucentCull），即 SINGLE_NO_CULL 在这条路径上表现为剔除。
+        ObjMeshCube.Backface opaqueBackface =
+                ParachuteConfig.SHADERS_GEOMETRY.get() == ParachuteConfig.ShadersGeometry.DOUBLE
+                        ? ObjMeshCube.Backface.DOUBLE
+                        : ObjMeshCube.Backface.SINGLE;
         // 高面数模型烘进 GPU 缓冲（顶点常驻显存，每帧只 bind + draw）。
         //
-        // 渲染结果已经逐项核对过与逐帧发射一致，差异只剩两处固有来源：
-        //   - 顶点烘焙按 (光照, 染色) 分组，光照量化到 4 级（亮度差 <2%，肉眼无感）；
-        //   - 逐帧路径走 MultiBufferSource 批次、烘焙路径是立即绘制，重合几何的 z-fighting
-        //     胜者偶尔不同（和逐帧路径内部不同批次的相对顺序一样是任意的）。
-        // 想临时退回逐帧发射做对比：-Dparachute.debug.nogpu=true
+        // 开光影（Iris）时**照样烘焙**：Iris 会接管绘制，而它用的是这次绘制的 ModelViewMat
+        // （我们传的是 相机 × 物体姿态），所以缓冲里的模型空间法线对它是正确的。
+        // 唯一要改的是着色器实例：自定义程序不在 Iris 管线里（会整个画不出来），
+        // 所以在 ObjGpuMesh.draw 里换成原版实例，由 Iris 替换成自己的程序；
+        // 这同时也决定了几何烘几份（无光影恒为一份；开光影按 ParachuteConfig.ShadersGeometry，
+        // 见 ObjMeshCube.Backface）。
+        // 想强制退回逐帧发射做对比：-Dparachute.debug.nogpu=true
         boolean bake = mesh.triangleCount() >= BAKE_MIN_TRIANGLES
                 && !Boolean.getBoolean("parachute.debug.nogpu");
         List<Layer> layers = new ArrayList<>(byKey.size());
         int index = 0;
         for (LayerSpec spec : byKey.values()) {
-            ModelPart root = bake ? null : ObjModelBuilder.build(spec.groups);
-            ObjGpuCache gpu = bake ? new ObjGpuCache(spec.groups) : null;
             // 是否真的需要半透明渲染：只有 d<1，或者贴图里有"大量中间 alpha"时才算。
             // 光看"有没有 map_d"是不够的 —— 例如这把 AH-64D 的遮罩 96~100% 是白色（=不透明），
             // 只有零星窗口是透明的；那种层必须用 cutout（透明处直接丢弃），
@@ -519,6 +547,10 @@ public final class ParachuteAssets {
             // 离远了 alpha 趋近 0，模型就"消失"了。
             float semi = semiAlphaFraction(spec);
             boolean translucent = spec.dissolve < 0.999F || semi >= 0.20F;
+
+            ModelPart root = bake ? null : ObjModelBuilder.build(spec.groups,
+                    translucent ? ObjMeshCube.Backface.DOUBLE : opaqueBackface);
+            ObjGpuCache gpu = bake ? new ObjGpuCache(spec.groups) : null;
             // 第一层沿用老后缀（单贴图模型的 RL 与以前一致），其余层按序号区分
             String texSuffix = index == 0 ? "original" : "m" + index + "_original";
             String whiteSuffix = index == 0 ? "white" : "m" + index + "_white";
@@ -528,8 +560,9 @@ public final class ParachuteAssets {
                     : null;
             layers.add(new Layer(root, gpu, texture, white, translucent, spec.dissolve));
             if (translucent) {
-                ParachuteMod.LOGGER.debug("OBJ layer {} of '{}/{}' is translucent (d={}, semiAlpha={}%)",
-                        index, source, id, spec.dissolve, Math.round(semi * 100.0F));
+                ParachuteMod.LOGGER.info(
+                        "OBJ layer {} of '{}/{}' is translucent (d={}, semiAlpha={}%, texture={})",
+                        index, source, id, spec.dissolve, Math.round(semi * 100.0F), spec.label());
             }
             index++;
         }
@@ -551,8 +584,15 @@ public final class ParachuteAssets {
                     source, id, translucent);
         }
         if (noMaterialMap > 0) {
-            ParachuteMod.LOGGER.info("OBJ parachute '{}/{}': {} group(s) had no map_Kd, using the primary texture {}",
-                    source, id, noMaterialMap, primary == null ? "<none>" : primary.getFileName());
+            StringBuilder colors = new StringBuilder();
+            for (int rgb : noMapColors) {
+                if (colors.length() > 0) colors.append(", ");
+                colors.append('#').append(String.format("%06x", rgb));
+            }
+            ParachuteMod.LOGGER.info(
+                    "OBJ parachute '{}/{}': {} group(s) have no map_Kd (untextured material); "
+                            + "rendered with the mtl Kd colour(s) {} instead of borrowing another texture",
+                    source, id, noMaterialMap, colors);
         }
         if (data.droppedFaces > 0) {
             ParachuteMod.LOGGER.warn("OBJ parachute '{}/{}': {} face(s) dropped (degenerate/duplicate/out-of-range)",
@@ -583,6 +623,9 @@ public final class ParachuteAssets {
      * 明显大于 0（玻璃、渐变）→ 必须走半透明，否则中间 alpha 会被 cutout 当二值处理。</p>
      */
     private static float semiAlphaFraction(LayerSpec spec) {
+        if (spec.albedo == null) {
+            return 0.0F;   // 纯色层：没有中间 alpha
+        }
         try (InputStream in = Files.newInputStream(spec.albedo)) {
             NativeImage image = NativeImage.read(in);
             if (spec.mask != null) {
@@ -607,18 +650,28 @@ public final class ParachuteAssets {
         }
     }
 
-    /** 一层在构建期的规格：同一张 albedo + 同一个遮罩 + 同一个 d 的组合 */
+    /** 一层在构建期的规格：同一张 albedo（或同一个纯色）+ 同一个遮罩 + 同一个 d 的组合 */
     private static final class LayerSpec {
+        /** 为 null 表示这一层没有贴图，用 {@link #solidRgb} 的纯色 */
+        @Nullable
         final Path albedo;
         @Nullable
         final Path mask;
         final float dissolve;
+        final int solidRgb;
         final List<ObjMesh.Group> groups = new ArrayList<>();
 
-        LayerSpec(Path albedo, @Nullable Path mask, float dissolve) {
+        LayerSpec(@Nullable Path albedo, @Nullable Path mask, float dissolve, int solidRgb) {
             this.albedo = albedo;
             this.mask = mask;
             this.dissolve = dissolve;
+            this.solidRgb = solidRgb;
+        }
+
+        /** 日志用：贴图文件名，没有贴图时显示 {@code #rrggbb} */
+        String label() {
+            return this.albedo != null ? this.albedo.getFileName().toString()
+                    : "#" + String.format("%06x", this.solidRgb);
         }
     }
 
@@ -630,24 +683,6 @@ public final class ParachuteAssets {
         if (Files.isRegularFile(inTextureDir)) return inTextureDir;
         Path plain = dir.resolve(fileName);
         return Files.isRegularFile(plain) ? plain : null;
-    }
-
-    /**
-     * OBJ 的主贴图（兜底用）：先按 {@code .mtl} 里 {@code map_Kd} 的文件名在 {@code textures/} 里找，
-     * 其次伞文件夹根目录，再退到 {@code textures/} 里名字最小的图片，最后才是根目录里最小的。
-     */
-    @Nullable
-    private static Path findObjPng(Path dir, Map<String, ObjParser.Material> materials) {
-        for (ObjParser.Material material : materials.values()) {
-            Path image = resolveImage(dir, material.diffuse());
-            if (image != null) return image;
-        }
-        for (ObjParser.Material material : materials.values()) {
-            Path image = resolveImage(dir, material.alphaMask());
-            if (image != null) return image;
-        }
-        Path first = firstPng(dir.resolve(TEXTURE_DIR));
-        return first != null ? first : firstPng(dir);
     }
 
     /** 目录里文件名最小的 png（保证结果稳定，不受文件系统顺序影响） */
@@ -672,12 +707,24 @@ public final class ParachuteAssets {
      *
      * <p>如果材质带 {@code map_d} 透明度遮罩，先把遮罩的 alpha 合成进 albedo 的副本 ——
      * MC 的实体渲染一次只能采样一张贴图，没法同时传 albedo 和遮罩，所以必须在加载时合成。</p>
+     *
+     * <p>{@code spec.albedo == null}（材质没写 {@code map_Kd}）时不用任何贴图，
+     * 直接生成一张纯色图（材质的 {@code Kd}）—— 这样玻璃之类"无贴图材质"就不会糊上别的零件的贴图。</p>
      */
     @Nullable
     private static ResourceLocation registerObjTexture(LayerSpec spec, String source, String id,
                                                       String suffix, boolean white) {
-        try (InputStream in = Files.newInputStream(spec.albedo)) {
-            NativeImage image = NativeImage.read(in);
+        try {
+            NativeImage image;
+            if (spec.albedo == null) {
+                int rgb = spec.solidRgb;
+                image = new NativeImage(1, 1, true);
+                image.setPixelRGBA(0, 0, 0xFF000000 | rgb);
+            } else {
+                try (InputStream in = Files.newInputStream(spec.albedo)) {
+                    image = NativeImage.read(in);
+                }
+            }
             if (spec.mask != null) {
                 image = applyAlphaMask(image, spec.mask);
             }
@@ -689,7 +736,7 @@ public final class ParachuteAssets {
             return location;
         } catch (Exception e) {
             ParachuteMod.LOGGER.warn("Failed to load OBJ texture '{}' for '{}/{}': {}",
-                    spec.albedo, source, id, e.toString());
+                    spec.label(), source, id, e.toString());
             return null;
         }
     }

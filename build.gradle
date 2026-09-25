@@ -81,7 +81,6 @@ runs {
     }
 
     client {
-        // Comma-separated list of namespaces to load gametests from. Empty = all namespaces.
         systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
     }
 
@@ -162,9 +161,24 @@ dependencies {
         }
     }
 
-    def localCreateAeronauticsBundledJar = file("libs/create-aeronautics-bundled-${minecraft_version}-1.1.3.jar")
-    if (localCreateAeronauticsBundledJar.exists()) {
-        localRuntime files(localCreateAeronauticsBundledJar)
+    // Create: Aeronautics 测试环境（只在开发时用 localRuntime 挂上）。
+    //
+    // simulated / aeronautics 必须和 Sable 的**大版本**配套，混用会在加载子层级时
+    // NoClassDefFoundError（例如 simulated 1.1.x 用的 FixedConstraintConfiguration 在 Sable 2.x 已移除）：
+    //   Sable 2.x  →  simulated 1.3.x + aeronautics 1.3.x（libs/ 下两个独立 jar）
+    //   Sable 1.x  →  旧的 create-aeronautics-bundled-1.1.3.jar（jarjar 里就是 1.1.x 那一套）
+    // 优先用独立 jar，找不到时回退 bundled 包。模组自身的 Sable API 用法两个大版本都兼容。
+    def localSimulatedJar = file("libs/simulated-neoforge-${minecraft_version}-${simulated_version}.jar")
+    def localAeronauticsJar = file("libs/aeronautics-neoforge-${minecraft_version}-${aeronautics_version}.jar")
+    def localAeronauticsBundledJar = file("libs/create-aeronautics-bundled-${minecraft_version}-1.1.3.jar")
+    def localAeronauticsBundledDisabled = file("libs/create-aeronautics-bundled-${minecraft_version}-1.1.3.jar.disabled")
+    if (localSimulatedJar.exists() && localAeronauticsJar.exists()) {
+        localRuntime files(localSimulatedJar)
+        localRuntime files(localAeronauticsJar)
+    } else if (localAeronauticsBundledJar.exists()) {
+        localRuntime files(localAeronauticsBundledJar)
+    } else if (localAeronauticsBundledDisabled.exists()) {
+        localRuntime files(localAeronauticsBundledDisabled)
     }
 
     // Example optional mod dependency with JEI

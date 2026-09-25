@@ -170,7 +170,10 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
                 ParachuteAssets.applyOpenAnimation(root, parachute.openAnimation(), ratio, ANIMATION_CACHE);
             }
         }
-        // 逐层渲染：单贴图模型只有一层（等价于以前的一次 render），多材质 OBJ 每张贴图一层
+        // 逐层渲染：单贴图模型只有一层（等价于以前的一次 render），多材质 OBJ 每张贴图一层。
+        // 光影包状态每帧只探测一次，供这一帧所有层共用 —— 探测结果要和烘 GPU 缓冲时一致
+        // （两者不一致的那一帧会画错：一份的几何配剔除、或两份的几何配不剔除）。
+        boolean shaderPack = ShaderPackCompat.shaderPackInUse();
         for (ParachuteAssets.Layer layer : parachute.layers()) {
             ResourceLocation layerTex = dyed
                     ? (layer.whiteTexture() != null ? layer.whiteTexture() : layer.texture())
@@ -185,23 +188,37 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
                 layerColor = (color & 0x00FFFFFF) | (a << 24);
             }
             if (layer.gpu() != null) {
-                // 高面数模型：顶点常驻显存，这里只 bind + draw（光照/染色烘在缓冲里，行为和逐帧发射一致）
-                layer.gpu().get(brightLight, layerColor).draw(poseStack, layerTex, layer.translucent());
+                // 高面数模型：顶点常驻显存，这里只 bind + draw（光照/染色烘在缓冲里，行为和逐帧发射一致）。
+                // 几何份数 / 是否剔除背面（见 ObjMeshCube.Backface 与 ParachuteConfig.ShadersGeometry）：
+                //   半透明层 → 固定两份 + 剔除（不剔除的话正反面片元各混合一次，颜色会明显加深）
+                //   不透明层 → 按配置，**开不开光影都一样**（这样两种情况下外观一致）：
+                //              SINGLE_CULL（默认）一份 + 剔除；DOUBLE 两份 + 剔除；SINGLE_NO_CULL 一份 + 不剔除
+                boolean duplicate;
+                boolean cull;
+                if (layer.translucent()) {
+                    duplicate = true;
+                    cull = true;
+                } else {
+                    ParachuteConfig.ShadersGeometry mode = ParachuteConfig.SHADERS_GEOMETRY.get();
+                    duplicate = mode == ParachuteConfig.ShadersGeometry.DOUBLE;
+                    cull = mode != ParachuteConfig.ShadersGeometry.SINGLE_NO_CULL;
+                }
+                layer.gpu().get(brightLight, layerColor, duplicate)
+                        .draw(poseStack, layerTex, layer.translucent(), shaderPack, cull);
                 continue;
             }
             if (layer.model() == null) {
                 continue;
             }
-            // 不透明层：entityCutoutNoCull —— 不剔除背面。
-            //   DCS 转换出来的 OBJ 绕序经常不一致（同一模型里外壳/内壳、单面片混在一起），
-            //   一旦剔除就会出现"整片外壳消失、只剩骨架"（从某些角度看特别明显），
-            //   所以不透明层一律不剔除（代价是重合几何可能 z-fighting，由贴图 mipmap 掩盖一部分）。
-            // 半透明层：entityTranslucentCull —— 保留剔除。
-            //   玻璃球罩这类闭合壳体不剔除时，正面/背面/内层几何会叠在一起混合，
-            //   看起来就是"一大堆三角锯齿"（这就是光瞄那个问题的成因）。
+            // 逐帧发射路径（低面数模型）：几何份数同样按配置（见 ParachuteAssets 里的 opaqueBackface），
+            // 这里只负责渲染类型 —— 两类都在**剔除背面**：
+            //   两份几何时，被剔除的永远是不该看见的那一面（DCS 绕序不一致、薄片单面都被消化掉了）；
+            //   一份几何时，剔除保证"画出来的片元法线一定朝向相机"，光照必然正确（薄片背面会消失）。
+            // 这条路径用的是原版 RenderType，没有自有着色器，所以拿不到 gl_FrontFacing 那条更省的做法。
+            // 半透明层本来就该剔除（玻璃球罩不剔除时正/背面与内层会叠在一起，看着像一堆三角锯齿）。
             VertexConsumer layerVc = buffer.getBuffer(layer.translucent()
                     ? RenderType.entityTranslucentCull(layerTex)
-                    : RenderType.entityCutoutNoCull(layerTex));
+                    : RenderType.entityCutout(layerTex));
             layer.model().render(poseStack, layerVc, brightLight, packedOverlay, layerColor);
         }
 

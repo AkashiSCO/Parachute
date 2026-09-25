@@ -91,9 +91,45 @@ public final class ObjParser {
      * （albedo 常常是纯不透明 jpg），而是靠 {@code map_d} 或 {@code d} 表达 ——
      * 所以这两个键必须解析，否则那些部件会渲染成不透明的，看起来就是"半透明材质没了"。</p>
      */
-    public record Material(@Nullable String diffuse, @Nullable String alphaMask, float dissolve) {
+    public record Material(@Nullable String diffuse, @Nullable String alphaMask, float dissolve,
+                           float colorR, float colorG, float colorB) {
 
-        public static final Material DEFAULT = new Material(null, null, 1.0F);
+        public static final Material DEFAULT = new Material(null, null, 1.0F, 1.0F, 1.0F, 1.0F);
+
+        /** 兼容构造：Kd 按白色（没写 Kd 的材质） */
+        public Material(@Nullable String diffuse, @Nullable String alphaMask, float dissolve) {
+            this(diffuse, alphaMask, dissolve, 1.0F, 1.0F, 1.0F);
+        }
+
+        Material withDiffuse(String name) {
+            return new Material(name, this.alphaMask, this.dissolve, this.colorR, this.colorG, this.colorB);
+        }
+
+        Material withAlphaMask(String name) {
+            return new Material(this.diffuse, name, this.dissolve, this.colorR, this.colorG, this.colorB);
+        }
+
+        Material withDissolve(float value) {
+            return new Material(this.diffuse, this.alphaMask, value, this.colorR, this.colorG, this.colorB);
+        }
+
+        Material withColor(float r, float g, float b) {
+            return new Material(this.diffuse, this.alphaMask, this.dissolve, r, g, b);
+        }
+
+        /**
+         * 没有 {@code map_Kd} 时用的纯色（Kd），打包成 0xRRGGBB。
+         *
+         * <p>DCS 的玻璃就是这种材质：{@code illum 9} + {@code Kd 0 0 0} + {@code Ks 1 1 1} + {@code d 0.1}，
+         * <b>完全不引用贴图</b>。以前这种组会去借用"模型的主贴图"，于是别的贴图（例如
+         * {@code ah-64d_dispenser_d.jpg} 上那两行 WARNING 文字）就会被糊到玻璃上。</p>
+         */
+        public int solidRgb() {
+            int r = Math.round(Math.min(1.0F, Math.max(0.0F, this.colorR)) * 255.0F);
+            int g = Math.round(Math.min(1.0F, Math.max(0.0F, this.colorG)) * 255.0F);
+            int b = Math.round(Math.min(1.0F, Math.max(0.0F, this.colorB)) * 255.0F);
+            return (r << 16) | (g << 8) | b;
+        }
 
         /** 这个材质是否需要半透明渲染 */
         public boolean hasAlpha() {
@@ -403,15 +439,26 @@ public final class ObjParser {
                 case "map_kd" -> {
                     String name = lastTokenFileName(rest);
                     if (name != null) {
-                        Material old = out.getOrDefault(current, Material.DEFAULT);
-                        out.put(current, new Material(name, old.alphaMask(), old.dissolve()));
+                        out.put(current, out.getOrDefault(current, Material.DEFAULT).withDiffuse(name));
                     }
                 }
                 case "map_d" -> {
                     String name = lastTokenFileName(rest);
                     if (name != null) {
-                        Material old = out.getOrDefault(current, Material.DEFAULT);
-                        out.put(current, new Material(old.diffuse(), name, old.dissolve()));
+                        out.put(current, out.getOrDefault(current, Material.DEFAULT).withAlphaMask(name));
+                    }
+                }
+                case "kd" -> {
+                    // 漫反射颜色：没有 map_Kd 的材质（DCS 的玻璃等）就靠它上色
+                    String[] toks = splitTokens(rest);
+                    if (toks.length >= 3) {
+                        try {
+                            float r = Float.parseFloat(toks[0]);
+                            float g = Float.parseFloat(toks[1]);
+                            float b = Float.parseFloat(toks[2]);
+                            out.put(current, out.getOrDefault(current, Material.DEFAULT).withColor(r, g, b));
+                        } catch (NumberFormatException ignored) {
+                        }
                     }
                 }
                 case "d" -> {
@@ -421,8 +468,7 @@ public final class ObjParser {
                         try {
                             float v = Float.parseFloat(toks[toks.length - 1]);
                             if (v >= 0.0F && v <= 1.0F) {
-                                Material old = out.getOrDefault(current, Material.DEFAULT);
-                                out.put(current, new Material(old.diffuse(), old.alphaMask(), v));
+                                out.put(current, out.getOrDefault(current, Material.DEFAULT).withDissolve(v));
                             }
                         } catch (NumberFormatException ignored) {
                         }

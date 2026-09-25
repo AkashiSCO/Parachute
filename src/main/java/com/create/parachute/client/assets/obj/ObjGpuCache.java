@@ -1,5 +1,7 @@
 package com.create.parachute.client.assets.obj;
 
+import com.create.parachute.ParachuteMod;
+
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -29,6 +31,8 @@ public final class ObjGpuCache implements AutoCloseable {
     private final List<ObjMesh.Group> groups;
     private final Map<Long, ObjGpuMesh> variants = new LinkedHashMap<>();
     private final int triangles;
+    /** 现有 variants 用的几何份数（true = 每三角形两份）；开关光影会变，变了就得整批重烘 */
+    private boolean doubleSided;
 
     public ObjGpuCache(List<ObjMesh.Group> groups) {
         this.groups = new ArrayList<>(groups);
@@ -50,8 +54,18 @@ public final class ObjGpuCache implements AutoCloseable {
      * 两半必须分别量化——曾经整体 clamp 到 0xFFFF，把 0xF000F0 压成 0xFFFF，
      * 顶点着色器里 texelFetch(Sampler2, UV2/16) 坐标越界返回全 0，
      * 表现为模型全黑且镂空（光照贴图 alpha=0 被 cutout 丢弃）。
+     *
+     * @param duplicateBackfaces 缓冲要不要"每三角形两份"（无光影的不透明层只要一份，见 ObjMeshCube.Backface）
      */
-    public ObjGpuMesh get(int packedLight, int tintColor) {
+    public ObjGpuMesh get(int packedLight, int tintColor, boolean duplicateBackfaces) {
+        // 光影开关 / shadersGeometry 配置切换 → 几何份数变了：同一份缓冲不能再复用（会画错），整批丢掉重烘
+        if (!this.variants.isEmpty() && this.doubleSided != duplicateBackfaces) {
+            ParachuteMod.LOGGER.info("OBJ GPU buffers re-baked: back-face copies {} -> {}",
+                    this.doubleSided ? "2x" : "1x", duplicateBackfaces ? "2x" : "1x");
+            close();
+        }
+        this.doubleSided = duplicateBackfaces;
+
         int block = (packedLight & 0xFFFF) / LIGHT_QUANTUM * LIGHT_QUANTUM;
         int sky = ((packedLight >>> 16) & 0xFFFF) / LIGHT_QUANTUM * LIGHT_QUANTUM;
         int quantized = block | (sky << 16);
@@ -60,7 +74,8 @@ public final class ObjGpuCache implements AutoCloseable {
         if (mesh != null) {
             return mesh;
         }
-        mesh = ObjGpuMesh.bake(this.groups, quantized, tintColor);
+        mesh = ObjGpuMesh.bake(this.groups, quantized, tintColor,
+                duplicateBackfaces ? ObjMeshCube.Backface.DOUBLE : ObjMeshCube.Backface.SINGLE);
         if (this.variants.size() >= MAX_VARIANTS) {
             Iterator<Map.Entry<Long, ObjGpuMesh>> it = this.variants.entrySet().iterator();
             if (it.hasNext()) {

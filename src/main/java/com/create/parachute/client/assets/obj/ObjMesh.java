@@ -1,10 +1,13 @@
 package com.create.parachute.client.assets.obj;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 烘焙好的 OBJ 网格：按 {@code o}（没有则 {@code g}）分组，每组是<b>按角展开</b>的扁平数组。
@@ -142,6 +145,18 @@ public final class ObjMesh {
      * @param unitScale OBJ 单位 → 方块（Blender 默认 1 unit = 1 m = 1 格，所以是 1.0）
      */
     public static ObjMesh bake(ObjParser.ObjData d, float unitScale) {
+        return bake(d, unitScale, 0.0D);
+    }
+
+    /**
+     * 把解析结果烘焙成可直接渲染的扁平网格。
+     *
+     * @param unitScale      OBJ 单位 → 方块（Blender 默认 1 unit = 1 m = 1 格，所以是 1.0）
+     * @param smoothAngleDeg 顶点法线自动平滑角度（度）：{@code 0} = 用文件里的 {@code vn}（或按 {@code s}）；
+     *                       {@code >0} = 按几何重算 —— 同一个顶点上与该面夹角在阈值内的面做角度加权平均，
+     *                       超过阈值的保持硬边（见 {@link #applyAutoSmooth}）
+     */
+    public static ObjMesh bake(ObjParser.ObjData d, float unitScale, double smoothAngleDeg) {
         final int tris = d.triangleCount;
         if (tris <= 0) {
             return new ObjMesh(List.of(), 0, 0, d.droppedFaces, d.ngonFaces);
@@ -174,16 +189,83 @@ public final class ObjMesh {
 
         // ---- 3. 逐角法线 ----
         float[] cornerNormals = new float[tris * 9];
-        if (d.sawNormalIndex) {
+        if (smoothAngleDeg > 0.0D) {
+            // 自动平滑：完全按几何重算（文件的 vn / s 都不看）。
+            // 好处之一是法线必然与绕序一致 —— 这也是"一份几何 + 剔除背面"能保证光照正确的前提。
             for (int t = 0; t < tris; t++) {
+                for (int k = 0; k < 3; k++) {
+                    copy3(faceNormals, t * 3, cornerNormals, (t * 3 + k) * 3);
+                }
+            }
+            int changed = applyAutoSmooth(d, tris, faceNormals, cornerNormals, smoothAngleDeg);
+            com.create.parachute.ParachuteMod.LOGGER.info(
+                    "OBJ: auto-smooth normals (angle {}°) changed {} of {} corners",
+                    String.format("%.0f", smoothAngleDeg), changed, tris * 3);
+        } else if (d.sawNormalIndex) {
+            // 文件里的 vn 可能是"部分轴存反"的：这个 AH-64D 就有一批零件（炮 / dummy / object…）
+            // 的 vn **Y 轴整体反向**，而其余零件正常 —— 表现就是那几组"顶面暗、底面亮"，
+            // 而整体取反又会把其余零件弄反，所以不能一刀切。
+            //
+            // 判据：按对象统计三个轴的"相关性" Σ(几何法线_i × vn_i)（用绕序算出的面法线作基准）。
+            // 正常情况三个分量都是正的；哪个轴为负，说明该零件的 vn 在这个轴上存反了。
+            // （只翻 Y 的情况用"整体点积"判不出来——侧面仍然同向，只有顶/底面反向，正好各占一半。）
+            Map<String, double[]> corr = new HashMap<>();   // object -> [x, y, z]
+            for (int t = 0; t < tris; t++) {
+                String object = byObject
+                        ? d.objectNames.get(d.triObject.get(t))
+                        : d.groupNames.get(d.triGroup.get(t));
+                double[] a = corr.computeIfAbsent(object, k -> new double[3]);
+                float gx = faceNormals[t * 3];
+                float gy = faceNormals[t * 3 + 1];
+                float gz = faceNormals[t * 3 + 2];
+                for (int k = 0; k < 3; k++) {
+                    int ni = d.triVn.get(t * 3 + k);
+                    if (ni < 0 || ni >= d.normals.size()) continue;
+                    float[] n = d.normals.get(ni);
+                    a[0] += (double) gx * n[0];
+                    a[1] += (double) gy * n[1];
+                    a[2] += (double) gz * n[2];
+                }
+            }
+
+            Map<String, float[]> signs = new HashMap<>();
+            int axisFixes = 0;
+            int affected = 0;
+            for (Map.Entry<String, double[]> e : corr.entrySet()) {
+                double[] a = e.getValue();
+                float sx = a[0] < 0.0D ? -1.0F : 1.0F;
+                float sy = a[1] < 0.0D ? -1.0F : 1.0F;
+                float sz = a[2] < 0.0D ? -1.0F : 1.0F;
+                if (sx < 0.0F) axisFixes++;
+                if (sy < 0.0F) axisFixes++;
+                if (sz < 0.0F) axisFixes++;
+                if (sx < 0.0F || sy < 0.0F || sz < 0.0F) {
+                    signs.put(e.getKey(), new float[] {sx, sy, sz});
+                    affected++;
+                }
+            }
+            if (affected > 0) {
+                com.create.parachute.ParachuteMod.LOGGER.info(
+                        "OBJ: {} object(s) had per-axis flipped vn ({} axis fix(es)); corrected",
+                        affected, axisFixes);
+            }
+
+            for (int t = 0; t < tris; t++) {
+                String object = byObject
+                        ? d.objectNames.get(d.triObject.get(t))
+                        : d.groupNames.get(d.triGroup.get(t));
+                float[] sign = signs.get(object);
+                float sx = sign == null ? 1.0F : sign[0];
+                float sy = sign == null ? 1.0F : sign[1];
+                float sz = sign == null ? 1.0F : sign[2];
                 for (int k = 0; k < 3; k++) {
                     int ni = d.triVn.get(t * 3 + k);
                     int out = (t * 3 + k) * 3;
                     if (ni >= 0 && ni < d.normals.size()) {
                         float[] n = d.normals.get(ni);
-                        cornerNormals[out] = n[0];
-                        cornerNormals[out + 1] = n[1];
-                        cornerNormals[out + 2] = n[2];
+                        cornerNormals[out] = sx * n[0];
+                        cornerNormals[out + 1] = sy * n[1];
+                        cornerNormals[out + 2] = sz * n[2];
                     } else {
                         // 文件里有 vn、但这个角没索引：用面法线兜底
                         // （Blender 那边会给 (0,0,0)，在 MC 里就是一片黑，所以这里刻意不同）
@@ -276,7 +358,9 @@ public final class ObjMesh {
 
                     int src = (t * 3 + k) * 3;
                     nor[c * 3] = cornerNormals[src];
-                    // 法线跟着位置一起做绕 X 轴 180°（Y、Z 同时翻），保持和几何一致
+                    // 法线跟着几何一起做绕 X 轴 180°（Y、Z 同时翻）：
+                    // 几何的 Y 取反是"伞面挂到 -Y"的挂载约定，法线保持与之同向即可 ——
+                    // 真正会出错的是"整体里外翻"的零件，那些在上面的投票/散度测试里已经翻回来了。
                     nor[c * 3 + 1] = -cornerNormals[src + 1];
                     nor[c * 3 + 2] = -cornerNormals[src + 2];
                 }
@@ -291,6 +375,114 @@ public final class ObjMesh {
 
     /** 位置量化 key（1e-4）：平滑法线按"同一个位置"合并，和 Blender 的顶点焊接语义一致 */
     private record PosKey(int x, int y, int z) {
+    }
+
+    /**
+     * 按几何自动平滑顶点法线（相当于 Blender 的 "Shade Auto Smooth" / 角度阈值平滑）。
+     *
+     * <p>做法：先把<b>同一位置</b>上的角归成一组（不管它们在文件里是不是同一个顶点索引 ——
+     * DCS/Blender 导出的硬边会把顶点拆开，按位置合并才能跨拆分平滑），然后对每个角，把同组里
+     * 与<b>本面</b>夹角在阈值内的面法线做<b>角度加权</b>平均（权重 = 该面在这个位置上的内角）。
+     * 超过阈值的面不参与，所以折边、面板分界仍然是硬边；曲面（机身、旋翼、炮管）则变平滑。</p>
+     *
+     * <p>DCS 转出来的 OBJ 大多是<b>逐面法线</b>（实测 AH-64D：979203 个面 / 2596357 个互不相同的
+     * 角法线，同一个位置上平均有 2.8 个不同法线），不做这一步曲面就是"一格一格"的硬边。</p>
+     *
+     * <p>另外，这样算出来的法线必定与绕序一致（这就是它的来源），所以"一份几何 + 剔除背面"
+     * 那种模式下光照必然正确。</p>
+     *
+     * @return 被改动过的角数（日志用）
+     */
+    private static int applyAutoSmooth(ObjParser.ObjData d, int tris, float[] faceNormals,
+                                      float[] cornerNormals, double angleDeg) {
+        float cosLimit = (float) Math.cos(Math.toRadians(angleDeg));
+
+        // 1. 位置 → 该位置上的所有角（角编号 = t*3+k）；bucket[0] 是数量，数据从 [1] 开始
+        Map<PosKey, int[]> byPos = new HashMap<>(tris * 2);
+        for (int t = 0; t < tris; t++) {
+            for (int k = 0; k < 3; k++) {
+                PosKey key = keyOf(d, d.triV.get(t * 3 + k));
+                int corner = t * 3 + k;
+                int[] bucket = byPos.get(key);
+                if (bucket == null) {
+                    byPos.put(key, new int[] {1, corner, 0, 0, 0});
+                } else {
+                    if (bucket[0] + 1 >= bucket.length) {
+                        bucket = Arrays.copyOf(bucket, bucket.length * 2);
+                        byPos.put(key, bucket);
+                    }
+                    bucket[++bucket[0]] = corner;
+                }
+            }
+        }
+
+        // 2. 每个角的"面内夹角"作为权重（角度加权，比平均权重更接近真实曲面法线）
+        float[] weight = new float[tris * 3];
+        for (int t = 0; t < tris; t++) {
+            for (int k = 0; k < 3; k++) {
+                weight[t * 3 + k] = cornerAngle(d, t, k);
+            }
+        }
+
+        // 3. 逐角平滑
+        int changed = 0;
+        for (int[] bucket : byPos.values()) {
+            int count = bucket[0];
+            for (int i = 1; i <= count; i++) {
+                int c1 = bucket[i];
+                int t1 = c1 / 3;
+                float nx = faceNormals[t1 * 3];
+                float ny = faceNormals[t1 * 3 + 1];
+                float nz = faceNormals[t1 * 3 + 2];
+                double sx = 0.0D;
+                double sy = 0.0D;
+                double sz = 0.0D;
+                for (int j = 1; j <= count; j++) {
+                    int c2 = bucket[j];
+                    int t2 = c2 / 3;
+                    float mx = faceNormals[t2 * 3];
+                    float my = faceNormals[t2 * 3 + 1];
+                    float mz = faceNormals[t2 * 3 + 2];
+                    // 超过阈值 = 硬边，这个面不参与平滑
+                    if (nx * mx + ny * my + nz * mz < cosLimit) continue;
+                    float w = weight[c2];
+                    sx += w * mx;
+                    sy += w * my;
+                    sz += w * mz;
+                }
+                double len = Math.sqrt(sx * sx + sy * sy + sz * sz);
+                if (len < 1.0E-9) continue;   // 退化（夹角全为 0 之类）：保留原法线
+                float rx = (float) (sx / len);
+                float ry = (float) (sy / len);
+                float rz = (float) (sz / len);
+                int o = c1 * 3;
+                if (rx * cornerNormals[o] + ry * cornerNormals[o + 1] + rz * cornerNormals[o + 2] < 0.999F) {
+                    changed++;
+                }
+                cornerNormals[o] = rx;
+                cornerNormals[o + 1] = ry;
+                cornerNormals[o + 2] = rz;
+            }
+        }
+        return changed;
+    }
+
+    /** 三角形 t 在角 k 处的内角（弧度） */
+    private static float cornerAngle(ObjParser.ObjData d, int t, int k) {
+        float[] a = d.positions.get(d.triV.get(t * 3 + k));
+        float[] b = d.positions.get(d.triV.get(t * 3 + (k + 1) % 3));
+        float[] c = d.positions.get(d.triV.get(t * 3 + (k + 2) % 3));
+        double ux = b[0] - a[0];
+        double uy = b[1] - a[1];
+        double uz = b[2] - a[2];
+        double vx = c[0] - a[0];
+        double vy = c[1] - a[1];
+        double vz = c[2] - a[2];
+        double lu = Math.sqrt(ux * ux + uy * uy + uz * uz);
+        double lv = Math.sqrt(vx * vx + vy * vy + vz * vz);
+        if (lu < 1.0E-12 || lv < 1.0E-12) return 0.0F;
+        double cos = (ux * vx + uy * vy + uz * vz) / (lu * lv);
+        return (float) Math.acos(Math.max(-1.0D, Math.min(1.0D, cos)));
     }
 
     private static PosKey keyOf(ObjParser.ObjData d, int vertexIndex) {

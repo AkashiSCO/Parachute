@@ -33,7 +33,7 @@ public final class ObjModelBuilder {
     }
 
     public static ModelPart build(ObjMesh mesh) {
-        return build(mesh.groups());
+        return build(mesh.groups(), ObjMeshCube.Backface.DOUBLE);
     }
 
     /**
@@ -41,15 +41,19 @@ public final class ObjModelBuilder {
      *
      * <p>多材质模型会先按贴图把组合并成"层"，每一层调用一次本方法；单贴图模型只有一层，
      * 结构和以前完全一致（每个 {@code o} 对象一个命名子节点）。</p>
+     *
+     * @param backface 几何份数策略；这条路径用的是原版 RenderType（没有自有着色器翻法线），
+     *                 所以 {@link ObjMeshCube.Backface#SINGLE} 必须配剔除背面的 RenderType
+     *                 （{@code entityCutout} / {@code entityTranslucentCull}），否则薄片背面光照会反
      */
-    public static ModelPart build(List<ObjMesh.Group> groups) {
+    public static ModelPart build(List<ObjMesh.Group> groups, ObjMeshCube.Backface backface) {
         List<ModelPart.Cube> rootCubes = new ArrayList<>();
         Map<String, ModelPart> children = new LinkedHashMap<>();
         Map<String, Integer> used = new HashMap<>();
 
         for (ObjMesh.Group group : groups) {
             if (group.cornerCount() <= 0) continue;
-            ObjMeshCube cube = new ObjMeshCube(group);
+            ObjMeshCube cube = new ObjMeshCube(group, backface);
             String name = group.name();
             if (name == null || name.isEmpty()) {
                 rootCubes.add(cube);

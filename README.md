@@ -7,7 +7,10 @@ Build a parachute onto your vehicle, deploy it with a redstone pulse, and glide 
 ## Features
 
 - Drop a folder into `<game root>/parachute/local/` and it shows up in the selection GUI instantly
-  - The built-in parachutes are placed into that folder automatically when the mod loads
+  - `parachute/`, `parachute/local/` and `parachute/server/` are created on first launch.
+    Only the default **mushroom** parachute is written into `parachute/local/` (it is the fallback used when
+    a deployed parachute is missing); the other built-ins stay inside the jar and are never auto-exported,
+    so deleting a parachute folder actually deletes it
   - **BlockBench**: `<name>.bbmodel` + `.png` — Java entity models and Bedrock edition models
   - **Blender / OBJ**: `<name>.obj` + `<name>.mtl` + `textures/*.png`, exported with Blender's default
     OBJ settings (**Forward: -Z, Up: Y**, scale 1 unit = 1 block, origin at the attach point).
@@ -15,6 +18,20 @@ Build a parachute onto your vehicle, deploy it with a redstone pulse, and glide 
     which is wrong for concave faces), and give each part its own object (`o`) — every object becomes a
     bone, so parts can later be driven by an animation.
     If both a `.bbmodel` and a `.obj` exist in the folder, the `.bbmodel` wins.
+    - **Vertex normals**: the exported `vn` are used as-is. If a model only carries *per-face* normals
+      (typical for DCS conversions, where curved surfaces then render as visible triangles), set
+      `visual.objSmoothAngle` (default `60`) to recompute them from the geometry: faces within the angle
+      are angle-weighted averaged, sharper edges stay hard. `0` disables it and keeps the file's normals.
+  - **Shaders (Iris)**: `visual.shadersGeometry` selects the geometry/cull strategy for opaque layers and
+    applies both with and without a shader pack, so the model looks the same either way:
+    `SINGLE_CULL` (default) = one copy + back-face culling (half the vertices; the shaded fragments always
+    face the camera, so lighting is always correct, but a one-sided thin part is invisible from behind),
+    `DOUBLE` = both windings + culling (both sides visible, double the vertices), `SINGLE_NO_CULL` = one copy
+    without culling, which needs a shader that flips back-facing normals (this mod's own shader does; for
+    packs see below). Translucent layers always use two copies + culling.
+    - Some packs (e.g. Photon) shade entities with a `flat` — i.e. per-triangle — normal, so any
+      smooth-shaded model still shows facets under them; that can only be fixed in the pack (add an
+      interpolated normal varying for lighting).
   - **Performance**: models with 20k+ triangles (the OBJ ones) are baked into GPU vertex buffers when
     they load, so a 980k-triangle model draws at 60+ fps instead of ~9. Results are per-layer identical to
     the normal path (light and dye are baked per variant); pass `-Dparachute.debug.nogpu=true` to compare

@@ -47,6 +47,33 @@ public final class ParachuteConfig {
     /** 伞的渲染器最大可见距离（格），上限 2^16 = 65536 */
     public static final ModConfigSpec.IntValue VIEW_DISTANCE;
 
+    /**
+     * 伞模型（不透明层）的几何 / 剔除策略，<b>开不开光影都用同一套</b>（这样两种情况外观一致）。
+     *
+     * <p>背景：光影包的延迟着色只认<b>顶点法线</b>（例如 Photon 的 gbuffer 平面法线 =
+     * {@code tbn[2] = mat3(gbufferModelViewInverse) * normalize(gl_NormalMatrix * gl_Normal)}），
+     * 而一个顶点只能有一个法线 —— 所以"同一块面从两侧看光照都对"就必须有两个法线版本，
+     * 也就是顶点数 ×2。只发一份又要两侧都对，只有让着色器按 {@code gl_FrontFacing} 翻法线
+     * （本模组自己的着色器会翻；光影包要它自己支持）。</p>
+     */
+    public enum ShadersGeometry {
+        /** 每面两份 + 剔除背面：薄片两面都看得见，代价是顶点/显存 ×2 */
+        DOUBLE,
+        /** 一份 + 剔除背面（默认）：光照一定正确（画出来的片元法线必然朝向相机），但只有一层的薄片零件从背面看会消失 */
+        SINGLE_CULL,
+        /** 一份 + 不剔除背面：靠着色器按 gl_FrontFacing 翻法线。无光影时本模组自己的着色器就能翻（完全无损）； */
+        SINGLE_NO_CULL
+    }
+
+    /** 不透明层的几何 / 剔除策略（见 {@link ShadersGeometry}） */
+    public static final ModConfigSpec.EnumValue<ShadersGeometry> SHADERS_GEOMETRY;
+
+    /**
+     * OBJ 顶点法线的自动平滑角度（度）：{@code 0} = 用文件里的 {@code vn}；{@code >0} = 按几何重算
+     * （同一个顶点上夹角在阈值内的面做角度加权平均，超过阈值的保持硬边）。
+     */
+    public static final ModConfigSpec.DoubleValue OBJ_SMOOTH_ANGLE;
+
     // ========== 物理 / 同步 ==========
 
     /** 阻力基础系数，所有拖拽力乘以此值 */
@@ -149,6 +176,34 @@ public final class ParachuteConfig {
                          "所以原版设置下有效上限约等于客户端渲染距离（最高 32 区块 = 512 格），",
                          "装了提高渲染距离/区块缓存的模组才能真正用到大数值。")
                 .defineInRange("viewDistance", 512, 0, 65536);
+
+        SHADERS_GEOMETRY = b
+                .comment("伞模型不透明层的几何/剔除策略，**开不开光影都用这一套**（两种情况外观一致）。",
+                         "顶点数是一倍还是两倍，帧数差别很大：实测 98 万面的 AH-64D 在 Photon 下",
+                         "DOUBLE 约 14ms/帧、SINGLE_* 约 7ms/帧。",
+                         "SINGLE_CULL（默认）：只发一份 + 剔除背面。光照一定正确（画出来的片元法线必然朝向相机），",
+                         "  代价是只有一层几何的薄片零件从背面看会消失（出现小孔）。",
+                         "DOUBLE：每个三角形发两份（绕序相反、法线各朝一侧）+ 剔除背面。",
+                         "  薄片两面都看得见，代价是顶点/显存 ×2。",
+                         "SINGLE_NO_CULL：只发一份 + 不剔除背面，靠着色器按 gl_FrontFacing 翻背面法线。",
+                         "  无光影时本模组自己的着色器就会翻 -> 完全无损（两面都看得见、光照也对）；",
+                         "  开光影时要用光影包的着色器，需要光影包自己翻，否则薄片背面光照会反：",
+                         "  Photon 把 shaders/program/gbuffers_all_solid.fsh 里的 `#define flat_normal tbn[2]`",
+                         "  改成 `#define flat_normal (gl_FrontFacing ? tbn[2] : -tbn[2])` 即可。",
+                         "半透明层固定「两份 + 剔除」（不剔除的话正反面片元会各混合一次，颜色明显加深）；",
+                         "逐帧发射路径（低于 2 万面的小模型）读的是加载时的配置值，改配置后重新加载该伞生效。")
+                .defineEnum("shadersGeometry", ShadersGeometry.SINGLE_CULL);
+
+        OBJ_SMOOTH_ANGLE = b
+                .comment("OBJ 模型顶点法线的自动平滑角度（度）。0 = 关闭，直接用 .obj 里的 vn。",
+                         "DCS 转出来的 OBJ 大多是**逐面法线**（实测 AH-64D：97.9 万个面 / 259.6 万个互不相同的",
+                         "角法线，同一个位置上平均 2.8 个不同法线），照着画曲面就是「一格一格」的硬边。",
+                         "设成 60（默认）时按几何重算：同一个顶点（按位置 1e-4 合并，跨顶点拆分也能平滑）上，",
+                         "与本面夹角在阈值内的面做角度加权平均，超过阈值的保持硬边。",
+                         "30 = 只平滑很平缓的曲面；90 = 几乎全平滑（圆角也会被糊掉）；180 = 完全平均。",
+                         "因为法线改成从几何算，它必定与绕序一致 —— 这也是 shadersGeometry=SINGLE_CULL",
+                         "（一份几何 + 剔除背面）光照必然正确的前提。改这个值后重新加载该伞生效。")
+                .defineInRange("objSmoothAngle", 60.0D, 0.0D, 180.0D);
 
         b.pop();
 

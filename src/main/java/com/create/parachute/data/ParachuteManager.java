@@ -55,7 +55,13 @@ public final class ParachuteManager {
     public static final String SERVER_FOLDER_NAME = "server";
     /** 未选择伞时的默认伞（蘑菇伞） */
     public static final String DEFAULT_PARACHUTE = "mushroom";
-    /** 内置伞 id（对应 resources/models/entity/*.bbmodel） */
+    /**
+     * 模组自带的伞 id（对应 {@code resources/assets/.../models/entity/<id>.bbmodel}）。
+     *
+     * <p><b>它们只留在 jar 里，不会自动导出到文件夹</b>：只有 {@link #DEFAULT_PARACHUTE}
+     * （蘑菇伞，渲染兜底）会在缺失时补进 {@code parachute/} 与 {@code parachute/local/}。
+     * 这个列表保留下来当"自带伞有哪些"的说明/API，导出逻辑不再使用它。</p>
+     */
     public static final List<String> BUILTIN_IDS = List.of(
             "parachute", "parachute1", "mushroom", "bigparachute", "bigparachute2");
 
@@ -116,18 +122,31 @@ public final class ParachuteManager {
     // ============================================================
 
     /**
-     * 两端都会调：确保<b>服务端伞库</b> {@code parachute/} 存在。
+     * 确保三个文件夹都存在：{@code parachute/}、{@code parachute/local/}、{@code parachute/server/}。
      *
-     * <p>首次加载（文件夹原本不存在）导出全部内置伞；后续加载只确保蘑菇伞存在
-     * （其他伞玩家可自行删除，不会重新导出）。客户端上这个文件夹是自己开世界
-     * （单机 / LAN 主机）时的伞库，所以客户端也要走一遍。</p>
+     * <p>{@code local} 是玩家自己的伞，{@code server} 下面再按服务器/存档 UUID 分文件夹。
+     * 两个都是空文件夹也保留，方便玩家直接把伞文件夹丢进去。</p>
      */
-    public static void ensureServerLibrary() {
-        ensureBuiltins(rootPath(), BUILTIN_IDS);
+    public static void ensureFolderLayout() {
+        createDir(rootPath());
+        createDir(localPath());
+        createDir(rootPath().resolve(SERVER_FOLDER_NAME));
     }
 
     /**
-     * <b>客户端</b>调用：确保玩家自己的伞文件夹 {@code parachute/local} 存在。
+     * 两端都会调：确保<b>服务端伞库</b> {@code parachute/} 存在。
+     *
+     * <p>只建文件夹结构，<b>不</b>往里面铺任何内置伞 —— 默认伞（蘑菇）由客户端的
+     * {@link #ensureClientFolders()} 直接放进 {@code parachute/local/}。
+     * 服务端伞库里有什么，完全由服主决定；{@code /parachute distribute} 也只散它里面有的。</p>
+     */
+    public static void ensureServerLibrary() {
+        ensureFolderLayout();
+    }
+
+    /**
+     * <b>客户端</b>调用：确保玩家自己的伞文件夹 {@code parachute/local} 存在，
+     * 并把默认伞（蘑菇）直接放进去。
      *
      * <p>第一次创建时会先把现有的 {@code parachute/<伞名>} 各复制一份进来（旧版本升级迁移）。
      * 用复制而不是移动：{@code parachute/<伞名>} 在客户端上还是「自己开世界」时的伞库，
@@ -136,7 +155,9 @@ public final class ParachuteManager {
     public static void ensureClientFolders() {
         Path root = rootPath();
         Path local = localPath();
-        boolean firstLoad = !Files.isDirectory(local);
+        boolean firstLoad = !Files.isDirectory(local);   // 必须在建文件夹之前判断
+
+        ensureFolderLayout();                            // parachute/、local/、server/ 都要有
 
         if (firstLoad && Files.isDirectory(root)) {
             for (String id : listParachuteIds(root)) {
@@ -150,11 +171,11 @@ public final class ParachuteManager {
                 }
             }
         }
-        createDir(local);
-        ensureBuiltins(local, firstLoad ? BUILTIN_IDS : List.of(DEFAULT_PARACHUTE));
+        // 默认伞（蘑菇）直接放 local：缺了就补回来。其余内置伞只留在 jar 里，不导出。
+        ensureBuiltins(local, List.of(DEFAULT_PARACHUTE));
     }
 
-    /** 首次加载导出全部内置伞，之后只补默认伞 */
+    /** 把给定的内置伞导出到文件夹（已存在则跳过） */
     private static void ensureBuiltins(Path root, List<String> ids) {
         createDir(root);
         for (String id : ids) {
