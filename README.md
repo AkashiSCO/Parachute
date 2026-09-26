@@ -1,4 +1,4 @@
-# Create:Parachute (1.1.3)
+# Create:Parachute (1.1.3a)
 
 A parachute mod for **Create** and **Sable physics**.
 
@@ -45,6 +45,11 @@ Build a parachute onto your vehicle, deploy it with a redstone pulse, and glide 
   - **Save / M / P / R / Lock** — apply settings, model offset, pivot offset, rotation, lock rotation
 - **Parachute selection GUI** — scrollable list of parachutes, open the game's `parachute/` folder in your file explorer
 - **Dye support** — recolor a placed parachute with any dye; restore the original with an axe
+- **Seat parachute pack** — a wrench (Create's or any `c:tools/wrench`) or a debug stick right-click toggles a pack
+  between the normal form and a cushion you can sit on. Empty-hand right-click sits down (sneak to get off),
+  Shift + right-click opens the usual controller GUI, and everything else (deploy/retract, dye, redstone,
+  comparator output, the GUI) works exactly the same; breaking either form drops the ordinary pack item.
+  Cushion height is the `visual.seatHeight` config option.
 - **Multiplayer** — every server gets its own folder on your machine, so joining a server never mixes its parachutes with another server's or with your own; parachutes the player doesn't have fall back to the default mushroom
 
 ## Folders

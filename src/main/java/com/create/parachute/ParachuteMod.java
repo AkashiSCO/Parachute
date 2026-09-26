@@ -13,6 +13,7 @@ import com.create.parachute.network.SyncParachuteTransformPayload;
 import com.create.parachute.registry.ModBlockEntities;
 import com.create.parachute.registry.ModBlocks;
 import com.create.parachute.registry.ModCreativeTabs;
+import com.create.parachute.registry.ModEntities;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
@@ -40,6 +41,7 @@ public class ParachuteMod {
         ModBlocks.ITEMS.register(modEventBus);
         ModCreativeTabs.CREATIVE_MODE_TABS.register(modEventBus);
         ModBlockEntities.BLOCK_ENTITY_TYPES.register(modEventBus);
+        ModEntities.ENTITY_TYPES.register(modEventBus);
         modEventBus.addListener(this::registerPayloads);
 
         // 客户端渲染器注册在 com.create.parachute.client.ClientSetup，

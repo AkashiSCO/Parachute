@@ -6,7 +6,7 @@
       "entries": [
         {
           "type": "minecraft:item",
-          "name": "create_parachute:parachute_block_2"
+          "name": "create_parachute:parachute_block"
         }
       ],
       "conditions": [

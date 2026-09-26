@@ -1,7 +1,14 @@
 package com.create.parachute.client;
 
 import com.create.parachute.ParachuteMod;
+import com.create.parachute.parachute.ParachuteSeatEntity;
 import com.create.parachute.registry.ModBlockEntities;
+import com.create.parachute.registry.ModEntities;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -28,5 +35,28 @@ public final class ClientSetup {
         event.registerBlockEntityRenderer(
                 ModBlockEntities.PARACHUTE_BLOCK_ENTITY.get(),
                 ParachuteRenderer::new);
+        // 坐垫的座位实体完全不可见（外观由方块模型负责），但显式注册一个空渲染器，
+        // 免得依赖"没注册渲染器时渲染分发器会跳过"这个细节。
+        event.registerEntityRenderer(ModEntities.PARACHUTE_SEAT.get(), SeatRenderer::new);
+    }
+
+    /** 什么都不画的渲染器：座位实体只用于骑乘，可见外观是坐垫方块本身 */
+    private static final class SeatRenderer extends EntityRenderer<ParachuteSeatEntity> {
+        private static final ResourceLocation DUMMY =
+                ResourceLocation.withDefaultNamespace("textures/misc/white.png");
+
+        private SeatRenderer(EntityRendererProvider.Context context) {
+            super(context);
+        }
+
+        @Override
+        public void render(ParachuteSeatEntity entity, float entityYaw, float partialTick, PoseStack poseStack,
+                           MultiBufferSource bufferSource, int packedLight) {
+        }
+
+        @Override
+        public ResourceLocation getTextureLocation(ParachuteSeatEntity entity) {
+            return DUMMY;
+        }
     }
 }
