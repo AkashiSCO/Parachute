@@ -75,10 +75,12 @@ public final class ParachuteConfig {
     public static final ModConfigSpec.DoubleValue OBJ_SMOOTH_ANGLE;
 
     /**
-     * 坐垫伞包的座位高度：座位点相对<b>方块底面</b>的偏移（格，一格 = 1.0）。
-     * 负值表示座位落在方块底面之下（默认 -0.4375 = 往下 7/16 格），调大就坐得更高。
+     * 坐垫伞包的座位点不再用单独的配置项：座位点 = 方块中心 + 方块上设的枢轴偏移
+     * （伞包界面「枢轴点」模式，见 {@code ParachuteSeatEntity#seatPoint()}）。
+     * <p>旧版本这里有个 {@code visual.seatHeight}（默认 -0.4375）；配置项已移除，
+     * 旧配置文件里残留的那一行会被忽略，不影响启动。</p>
      */
-    public static final ModConfigSpec.DoubleValue SEAT_HEIGHT;
+    public static final String SEAT_HEIGHT_REMOVED_NOTE = "seatHeight 已被枢轴偏移取代";
 
     // ========== 物理 / 同步 ==========
 
@@ -210,14 +212,6 @@ public final class ParachuteConfig {
                          "因为法线改成从几何算，它必定与绕序一致 —— 这也是 shadersGeometry=SINGLE_CULL",
                          "（一份几何 + 剔除背面）光照必然正确的前提。改这个值后重新加载该伞生效。")
                 .defineInRange("objSmoothAngle", 60.0D, 0.0D, 180.0D);
-
-        SEAT_HEIGHT = b
-                .comment("坐垫伞包（seat 形态）的座位高度：座位点相对方块底面的偏移，单位格（一格 = 1.0）。",
-                         "0 = 正好坐在方块底面上；负值 = 往下沉（默认 -0.4375 = 往下 7/16 格），正值 = 往上。",
-                         "玩家模型在骑乘姿态下以座位点为原点渲染，所以这个值决定坐着的高度。",
-                         "改完立刻生效：已经坐着的玩家下一 tick 就会跟着动（坐垫本身不用重新放）。",
-                         "联机时客户端和服务端各读自己的配置，两边不一致会出现位置回弹，建议保持一致。")
-                .defineInRange("seatHeight", -0.4375D, -2.0D, 2.0D);
 
         b.pop();
 

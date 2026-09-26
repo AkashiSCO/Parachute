@@ -94,7 +94,7 @@ public final class BbModelParser {
 
             MeshDefinition mesh = new MeshDefinition();
             PartDefinition rootPart = mesh.getRoot().addOrReplaceChild(
-                    "root", CubeListBuilder.create(), PartPose.offset(0.0F, 0.0F, 0.0F));
+                    "root", CubeListBuilder.create(), upAxisBake(root));
 
             JsonArray outliner = GsonHelper.getAsJsonArray(root, "outliner", new JsonArray());
             buildNodes(outliner, rootPart, elements, groups, animBoneNames,
@@ -345,8 +345,16 @@ public final class BbModelParser {
             }
 
             JsonArray outliner = GsonHelper.getAsJsonArray(root, "outliner", new JsonArray());
-            return buildModelParts(outliner, elements, groups, animBoneNames,
+            ModelPart built = buildModelParts(outliner, elements, groups, animBoneNames,
                     new float[]{0.0F, 0.0F, 0.0F}, new float[]{0.0F, 0.0F, 0.0F}, true, texW, texH);
+            // 根节点烘焙：把伞顶归一化到 +Y（见 upAxisBake 的说明）。根节点自己的姿态没人用，
+            // 动画只动它下面的骨骼，所以在这里转整棵树最省事、也不会碰到动画。
+            if ("bedrock".equalsIgnoreCase(modelFormat(root))) {
+                built.setRotation((float) Math.PI, 0.0F, 0.0F);
+            } else {
+                built.setRotation(0.0F, 0.0F, (float) Math.PI);
+            }
+            return built;
         } catch (Exception e) {
             com.create.parachute.ParachuteMod.LOGGER.warn("Failed to build bbmodel ModelPart: {}", e.toString());
             return null;
@@ -357,6 +365,25 @@ public final class BbModelParser {
     private static String modelFormat(JsonObject root) {
         JsonObject meta = GsonHelper.getAsJsonObject(root, "meta", new JsonObject());
         return GsonHelper.getAsString(meta, "model_format", "modded_entity");
+    }
+
+    /**
+     * 模型空间的"伞顶朝上"烘焙：把伞顶从模型 −Y 侧翻到 <b>+Y</b> 侧。
+     *
+     * <p>为什么需要：BlockBench / Blender 导出的这些模型，伞顶（伞布）画在原点<b>下方</b>
+     * （模型空间 −Y），而渲染器是按"模型 +Y 对齐阻力方向"摆位的 —— 两边差一个 180°。以前这个
+     * 180° 是渲染器用 {@code rotateTo(0,-1,0,…)} 补的，结果 F3+B 里绿轴 +Y 朝下、GUI 的
+     * yaw/pitch/roll 也作用在一个上下颠倒的坐标系里。现在改成<b>加载时一次性翻正</b>，
+     * 渲染器统一用 +Y，模型空间和世界方向一致（外观不变，见下面的推导）。</p>
+     *
+     * <p>用哪个轴翻：180° 沿哪个轴都要让伞顶到 +Y，但还要保持和原来一模一样的朝向（否则前后会反），
+     * 解出来是 —— modded_entity 绕 <b>Z</b> 180°、bedrock 绕 <b>X</b> 180°。</p>
+     */
+    private static PartPose upAxisBake(JsonObject root) {
+        if ("bedrock".equalsIgnoreCase(modelFormat(root))) {
+            return PartPose.offsetAndRotation(0.0F, 0.0F, 0.0F, (float) Math.PI, 0.0F, 0.0F);
+        }
+        return PartPose.offsetAndRotation(0.0F, 0.0F, 0.0F, 0.0F, 0.0F, (float) Math.PI);
     }
 
     private static ModelPart buildModelParts(JsonArray nodes,

@@ -4,11 +4,14 @@ import com.create.parachute.ParachuteConfig;
 import com.create.parachute.client.assets.ParachuteAssets;
 import com.create.parachute.client.assets.ParachuteAssets.BakedParachute;
 import com.create.parachute.client.assets.obj.ObjGpuMesh;
+import com.create.parachute.parachute.ParachuteBlock;
 import com.create.parachute.parachute.ParachuteBlockEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.geom.ModelPart;
+import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
@@ -16,6 +19,7 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
 /**
@@ -29,6 +33,12 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
     private static final double RENDER_BOX_MIN = 16.0D;
 
     private static final Vector3f ANIMATION_CACHE = new Vector3f();
+
+    /** F3+B 调试标记：枢轴点 / 座位点那个小方块的一半边长（格） */
+    private static final double MARKER = 0.06D;
+
+    /** F3+B 调试标记：模型三轴的长度（格） */
+    private static final double AXIS = 0.6D;
 
     public ParachuteRenderer(BlockEntityRendererProvider.Context context) {
     }
@@ -112,10 +122,10 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
      */
     public static void renderModel(ParachuteBlockEntity be, float partialTick, PoseStack poseStack,
                                    MultiBufferSource buffer, int packedLight, int packedOverlay) {
-        if (!be.isDeployed()) return;
-
-        BakedParachute parachute = ParachuteAssets.get(be.getParachuteName());
-        if (parachute == null || !parachute.hasTexture()) return;
+        // 伞面只有"已开伞"时才有（收起/坐垫状态的伞包是方块模型画的）。变换和 F3+B 调试标记则一律要算：
+        // 坐垫状态就是靠枢轴偏移对齐座位点的，收起状态下也得能看见那些标记。
+        BakedParachute parachute = be.isDeployed() ? ParachuteAssets.get(be.getParachuteName()) : null;
+        boolean drawCanopy = parachute != null && parachute.hasTexture();
 
         int brightLight = packedLight == 0 ? 0xF000F0 : packedLight;
         // 已染色：运行时生成的白色底贴图 + 染料 ARGB；未染色：文件夹里的原贴图（不染色）
@@ -140,8 +150,11 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
 
         poseStack.pushPose();
         poseStack.translate(0.5f + ox * dist, 0.5f + oy * dist, 0.5f + oz * dist);
-        // 整体偏移：整体平移（旋转前施加，输入多少移多少）
+        // 整体平移（旋转前施加）：枢轴点和模型一起挪。枢纽点是"旋转中心"= 这一段之后的 pose 原点，
+        // 也就是 ParachuteSeatEntity.seatPoint() 算的那个点和下面 debugPivotMarker 画的那个点。
         poseStack.translate(be.getOffX(), be.getOffY(), be.getOffZ());
+        // F3+B：枢轴点标记（坐垫形态=黄色座位点，其它=白色枢轴点），画在旋转之前 → 钉在方块坐标轴上
+        debugPivotMarker(be, poseStack, buffer);
         // 锁定：伞固定——不跟随速度方向、不自摆动，朝向按放置面方向（避免头朝下）
         boolean locked = be.isWobbleLocked();
         if (locked) {
@@ -151,16 +164,27 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
             poseStack.mulPose(Axis.XP.rotationDegrees((float) Math.sin(wobble * wobbleXFreq) * wobbleXAmp));
             poseStack.mulPose(Axis.ZP.rotationDegrees((float) Math.cos(wobble * wobbleZFreq) * wobbleZAmp));
         }
-        // 用户设置的旋转（自摆动坐标系）
-        poseStack.mulPose(Axis.XP.rotationDegrees(be.getRotX()));
-        poseStack.mulPose(Axis.YP.rotationDegrees(be.getRotY()));
-        poseStack.mulPose(Axis.ZP.rotationDegrees(be.getRotZ()));
-        // 枢轴点：模型位置偏移（旋转后施加，随旋转绕附着点摆动，输入多少移多少）
+        // 用户设置的旋转：欧拉角 —— Y = yaw（偏航）、X = pitch（俯仰）、Z = roll（翻滚），
+        // 依次 yaw → pitch → roll（先绕 Y，再绕转过去后的 X，最后绕再转过去后的 Z），也就是 aircraft
+        // 常见的"偏航-俯仰-横滚"。以前是三次 mulPose（X→Y→Z），那是另一种欧拉顺序，出来的朝向不一样。
+        poseStack.mulPose(new Quaternionf().rotationYXZ(
+                (float) Math.toRadians(be.getRotY()),
+                (float) Math.toRadians(be.getRotX()),
+                (float) Math.toRadians(be.getRotZ())));
+        // 枢轴平移（旋转后施加）：枢轴相对模型的位移 —— 枢轴点（座位点）待在原地不动，模型相对它挪
+        // PivotX/Y/Z（随旋转一起摆）。所以调枢轴 = 把模型在枢轴上滑；调整体偏移 = 枢轴和模型一起挪。
         poseStack.translate(be.getPivotX(), be.getPivotY(), be.getPivotZ());
-        // 整体缩放：在枢轴平移之后施加，等价于「以枢轴点（= 模型自身原点）为中心」缩放
+        // F3+B：模型三轴（画在模型原点上 → 显示当前朝向）
+        debugAxes(poseStack, buffer);
+        // 整体缩放：等价于「以枢轴点（= 模型自身原点）为中心」缩放
         float scale = be.getRenderScale();
         if (scale != 1.0F) {
             poseStack.scale(scale, scale, scale);
+        }
+
+        if (!drawCanopy) {
+            poseStack.popPose();
+            return;
         }
 
         // 有动画才驱动开伞动画；无动画直接显示模型
@@ -223,5 +247,68 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
         }
 
         poseStack.popPose();
+    }
+
+    /**
+     * F3+B（原版「显示碰撞箱」）打开时画调试标记用；关着就返回 null，调用方直接跳过。
+     * 顺手也尊重 F3+G（精简调试信息），和 Sable 的调试绘制保持一致。
+     */
+    private static VertexConsumer debugConsumer(MultiBufferSource buffer) {
+        Minecraft mc = Minecraft.getInstance();
+        if (!mc.getEntityRenderDispatcher().shouldRenderHitBoxes() || mc.showOnlyReducedInfo()) {
+            return null;
+        }
+        return buffer.getBuffer(RenderType.LINES);
+    }
+
+    /**
+     * F3+B 调试：<b>枢轴点标记</b>，画在"枢轴平移之后、旋转之前"，所以它就是方块坐标系里的枢轴点
+     * = {@code ParachuteSeatEntity.seatPoint()} 那个点。
+     *
+     * <ul>
+     *   <li>坐垫形态（seat=true）：画成<b>黄色</b> —— 这个点既是枢轴点也是座位点，玩家就坐在黄方块上；
+     *       不再画白色枢轴点/橙色座位点这两个旧标记。</li>
+     *   <li>非坐垫形态：画成<b>白色</b>（= 模型原点，旋转和缩放都绕它）。</li>
+     * </ul>
+     */
+    private static void debugPivotMarker(ParachuteBlockEntity be, PoseStack poseStack, MultiBufferSource buffer) {
+        VertexConsumer consumer = debugConsumer(buffer);
+        if (consumer == null) {
+            return;
+        }
+        boolean seat = isSeat(be);
+        float r = 1.0F;
+        float g = seat ? 0.95F : 1.0F;
+        float b = seat ? 0.15F : 1.0F;
+        LevelRenderer.renderLineBox(poseStack, consumer,
+                -MARKER, -MARKER, -MARKER, MARKER, MARKER, MARKER, r, g, b, 1.0F);
+    }
+
+    /** 这个伞包方块是不是坐垫形态 */
+    private static boolean isSeat(ParachuteBlockEntity be) {
+        return be.getBlockState().getBlock() instanceof ParachuteBlock
+                && be.getBlockState().getValue(ParachuteBlock.SEAT);
+    }
+
+    /**
+     * F3+B 调试：<b>模型三轴</b>（红 X、绿 Y、蓝 Z，各 0.6 格），画在用户旋转之后、整体平移之前 ——
+     * 位置在枢轴点（原点）上，方向就是模型当前朝向。
+     *
+     * <p>模型空间已经归一化成"伞顶 = +Y"（加载时烘焙，见 {@code BbModelParser.upAxisBake} /
+     * {@code ObjMesh}），所以对好朝向的伞，<b>绿轴 +Y 就是伞顶方向（朝上）</b>，不用再猜。</p>
+     */
+    private static void debugAxes(PoseStack poseStack, MultiBufferSource buffer) {
+        VertexConsumer consumer = debugConsumer(buffer);
+        if (consumer == null) {
+            return;
+        }
+        // 长度固定，画在缩放之前，所以不会随整体缩放变大变小
+        LevelRenderer.renderLineBox(poseStack, consumer, 0.0D, 0.0D, 0.0D, AXIS, 0.0D, 0.0D, 1.0F, 0.3F, 0.3F, 1.0F);
+        LevelRenderer.renderLineBox(poseStack, consumer, 0.0D, 0.0D, 0.0D, 0.0D, AXIS, 0.0D, 0.3F, 1.0F, 0.3F, 1.0F);
+        LevelRenderer.renderLineBox(poseStack, consumer, 0.0D, 0.0D, 0.0D, 0.0D, 0.0D, AXIS, 0.4F, 0.55F, 1.0F, 1.0F);
+        // 立刻刷掉这一批线：否则要等这一帧结束才画出来
+        if (buffer instanceof MultiBufferSource.BufferSource source) {
+            source.endLastBatch();
+        }
     }
 }

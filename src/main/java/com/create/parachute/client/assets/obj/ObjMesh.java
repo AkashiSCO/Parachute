@@ -328,14 +328,14 @@ public final class ObjMesh {
             for (int t : ts) {
                 for (int k = 0; k < 3; k++, c++) {
                     float[] p = d.positions.get(d.triV.get(t * 3 + k));
-                    float x = p[0] * unitScale;
-                    // 让伞面（模型 +Y 侧）落到 -Y（挂在附着点下面），和 bbmodel 路径的模型空间一致。
-                    // 但必须是**纯旋转**（绕 X 轴 180°）而不是只翻 Y：
-                    // 只翻 Y 是一次镜像，手性会反过来 —— bbmodel 那边由 MC 实体渲染自带的
-                    // scale(-1,-1,1)（绕 Z 的 180° 旋转，手性不变）补掉，OBJ 这条路径没有那一步，
-                    // 于是模型整体前后镜像（AH-64D 这类不对称模型一眼可见）。
-                    // 绕 X 轴 180°：(x, y, z) -> (x, -y, -z)，Y 和 Z 一起翻，det = +1。
-                    float y = -p[1] * unitScale;
+                    // 绕 Y 轴 180°：(x, y, z) -> (-x, y, -z)，det = +1（纯旋转，手性不变）。
+                    //
+                    // 为什么是绕 Y 而不是绕 X：模型空间约定"伞顶 = +Y"（渲染器 rotateTo(0,+1,0, 阻力方向)），
+                    // bbmodel 那边加载时会做同样的归一化（modded_entity 绕 Z 180°、bedrock 绕 X 180°）。
+                    // OBJ（Blender 导出 up=+Y）伞顶本来就在 +Y 侧，绕 X 180° 会把它压到 -Y（伞面朝下）；
+                    // 绕 Y 180° 既保留"伞顶在 +Y"又不镜像，和 bbmodel 路径解出来的解一致。
+                    float x = -p[0] * unitScale;
+                    float y = p[1] * unitScale;
                     float z = -p[2] * unitScale;
                     pos[c * 3] = x;
                     pos[c * 3 + 1] = y;
@@ -357,11 +357,10 @@ public final class ObjMesh {
                     }
 
                     int src = (t * 3 + k) * 3;
-                    nor[c * 3] = cornerNormals[src];
-                    // 法线跟着几何一起做绕 X 轴 180°（Y、Z 同时翻）：
-                    // 几何的 Y 取反是"伞面挂到 -Y"的挂载约定，法线保持与之同向即可 ——
-                    // 真正会出错的是"整体里外翻"的零件，那些在上面的投票/散度测试里已经翻回来了。
-                    nor[c * 3 + 1] = -cornerNormals[src + 1];
+                    // 法线跟着几何一起做同一个绕 Y 轴 180°（X、Z 同时翻），保持同向：
+                    // "模型里外翻"的零件已经在上面按对象做的投票/散度测试里翻回来了。
+                    nor[c * 3] = -cornerNormals[src];
+                    nor[c * 3 + 1] = cornerNormals[src + 1];
                     nor[c * 3 + 2] = -cornerNormals[src + 2];
                 }
             }

@@ -331,11 +331,14 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
 
         this.prevRenderQuat.set(this.renderQuat);
 
-        // rotateTo(0,-1,0, vel): 模型 -Y 对齐阻力方向
+        // rotateTo(0,+1,0, vel): 模型 +Y 对齐阻力方向（模型空间里伞顶 = +Y）
+        //   模型加载时已经把"伞顶"归一化到 +Y 侧了（见 BbModelParser 的根节点烘焙：modded_entity
+        //   绕 Z 180°、bedrock 绕 X 180°；OBJ 见 ObjMesh 的绕 Y 180°），所以这里用 +Y 才对得上，
+        //   而且 F3+B 里绿轴 +Y 就是伞顶方向（朝上）。
+        Quaternionf target = new Quaternionf().rotateTo(0, 1, 0,
+                (float) this.velX, (float) this.velY, (float) this.velZ);
         // rotateY(-90°): BlockBench 模型默认朝向补偿，仅 modded_entity 需要；
         // bedrock 模型（X 轴语义相反）不加，否则左右镜像。
-        Quaternionf target = new Quaternionf().rotateTo(0, -1, 0,
-                (float) this.velX, (float) this.velY, (float) this.velZ);
         if (!ClientHooks.isBedrockModel(getParachuteName())) {
             target.mul(new Quaternionf().rotateY((float) Math.toRadians(-90)));
         }
@@ -885,11 +888,11 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
 
     /**
      * 锁定时的固定朝向四元数：按方块放置面方向悬挂（不跟随速度方向、不摆动）。
-     * 与未部署时的方向一致，避免锁定后模型回落到 BlockBench 原始朝向（头朝下）。
+     * 和未部署时的方向一致（同样是"模型 +Y 对齐放置面方向"），锁定后不会翻过来。
      */
     public Quaternionf getLockedQuat() {
         Direction facing = getFacing();
-        Quaternionf q = new Quaternionf().rotateTo(0, -1, 0,
+        Quaternionf q = new Quaternionf().rotateTo(0, 1, 0,
                 facing.getStepX(), facing.getStepY(), facing.getStepZ());
         // bedrock 判断需要客户端的模型数据，经 ClientHooks 间接调用（本类服务端也会加载）
         if (!ClientHooks.isBedrockModel(getParachuteName())) {

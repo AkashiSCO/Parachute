@@ -1,4 +1,4 @@
-# Create:Parachute (1.1.3a)
+# Create:Parachute (1.1.3b)
 
 A parachute mod for **Create** and **Sable physics**.
 
@@ -42,14 +42,21 @@ Build a parachute onto your vehicle, deploy it with a redstone pulse, and glide 
   - **Cutaway** — low-speed detach threshold in m/s; below this speed the chute auto-retracts when enabled
   - **Low** — toggle low-speed auto-detach on/off
   - **RS** — redstone behaviour: a pulse deploys the chute; with RS on, another pulse retracts it
-  - **Save / M / P / R / Lock** — apply settings, model offset, pivot offset, rotation, lock rotation
+  - **Save / M / P / R / Lock** — apply settings, model offset, pivot offset, rotation, lock rotation.
+    **`P` (pivot)** shifts the pivot *relative to the model*: it is applied after the rotation, so the
+    pivot point (= where the player sits in seat mode) stays put and the model slides on it.
+    **`M` (model offset)** moves the pivot *and* the model together (applied before the rotation, in
+    block axes). Rotation is Euler YXZ (`Y` = yaw, `X` = pitch, `Z` = roll) and the model space has the
+    chute top on `+Y`, so the axes read like the world. With **F3 + B** on you get the pivot/seat marker
+    (yellow in seat mode) and the model's axes
 - **Parachute selection GUI** — scrollable list of parachutes, open the game's `parachute/` folder in your file explorer
 - **Dye support** — recolor a placed parachute with any dye; restore the original with an axe
 - **Seat parachute pack** — a wrench (Create's or any `c:tools/wrench`) or a debug stick right-click toggles a pack
   between the normal form and a cushion you can sit on. Empty-hand right-click sits down (sneak to get off),
   Shift + right-click opens the usual controller GUI, and everything else (deploy/retract, dye, redstone,
   comparator output, the GUI) works exactly the same; breaking either form drops the ordinary pack item.
-  Cushion height is the `visual.seatHeight` config option.
+  The player sits exactly on the pack's **pivot point**, so the pivot offset (`P` in the transform GUI) is
+  the one knob for where the cushion is: with **F3 + B** on, seat mode draws that point as a yellow marker.
 - **Multiplayer** — every server gets its own folder on your machine, so joining a server never mixes its parachutes with another server's or with your own; parachutes the player doesn't have fall back to the default mushroom
 
 ## Folders
