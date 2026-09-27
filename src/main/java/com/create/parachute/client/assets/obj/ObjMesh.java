@@ -23,6 +23,10 @@ public final class ObjMesh {
 
     /** 一个组 = (材质, 对象) 组合。{@link Group#name()} 是对象名（骨骼名），{@link Group#material()} 是材质名（决定贴图） */
     public static final class Group {
+
+        /** 包围盒厚度小于这个值（格）就当成"单面片"：一张平面/薄壳只发一份几何时，从背面看会整个消失 */
+        private static final float FLAT_EPS = 1.0E-4F;
+
         private final String name;
         private final String material;
         private final float[] positions;
@@ -35,6 +39,8 @@ public final class ObjMesh {
         private final float maxX;
         private final float maxY;
         private final float maxZ;
+        /** 单面片（某个轴上厚度≈0）——烘焙时强制双份，免得被背面剔除吃掉 */
+        private final boolean flat;
 
         Group(String name, String material, float[] positions, float[] uvs, float[] normals, int cornerCount,
               float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
@@ -50,6 +56,12 @@ public final class ObjMesh {
             this.maxX = maxX;
             this.maxY = maxY;
             this.maxZ = maxZ;
+            this.flat = (maxX - minX) < FLAT_EPS || (maxY - minY) < FLAT_EPS || (maxZ - minZ) < FLAT_EPS;
+        }
+
+        /** 是不是单面片（平面/薄壳）：是的话渲染时要发两份几何，否则从背面看会消失 */
+        public boolean flat() {
+            return this.flat;
         }
 
         public String name() {

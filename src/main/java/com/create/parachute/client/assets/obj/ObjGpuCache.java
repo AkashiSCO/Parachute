@@ -29,18 +29,34 @@ public final class ObjGpuCache implements AutoCloseable {
     private static final int MAX_VARIANTS = 2;
 
     private final List<ObjMesh.Group> groups;
+    /** bbmodel 路径：静态姿态直接烘，不经过 OBJ 网格（二选一，见下面两个构造） */
+    private final net.minecraft.client.model.geom.ModelPart part;
     private final Map<Long, ObjGpuMesh> variants = new LinkedHashMap<>();
-    private final int triangles;
+    private int triangles;
     /** 现有 variants 用的几何份数（true = 每三角形两份）；开关光影会变，变了就得整批重烘 */
     private boolean doubleSided;
 
     public ObjGpuCache(List<ObjMesh.Group> groups) {
         this.groups = new ArrayList<>(groups);
+        this.part = null;
         int count = 0;
         for (ObjMesh.Group group : groups) {
             count += group.cornerCount() / 3;
         }
         this.triangles = count;
+    }
+
+    /**
+     * bbmodel 路径：把一棵 {@code ModelPart} 的<b>当前姿态</b>烘成 GPU 缓冲（调用前先按要烘的姿态
+     * 应用开伞动画，然后 resetPose 恢复，见 ParachuteAssets）。
+     *
+     * <p>bbmodel 以前从不烘焙，每帧都要把整把伞的顶点重新写进缓冲区 —— 放几把就几十 MB/帧。
+     * 这里烘的是静态姿态，所以渲染端只在"动画不在播（或已播完）"时才用这份缓冲。</p>
+     */
+    public ObjGpuCache(net.minecraft.client.model.geom.ModelPart part) {
+        this.groups = null;
+        this.part = part;
+        this.triangles = 0;   // 烘完第一份时填上
     }
 
     public int triangles() {
@@ -74,8 +90,14 @@ public final class ObjGpuCache implements AutoCloseable {
         if (mesh != null) {
             return mesh;
         }
-        mesh = ObjGpuMesh.bake(this.groups, quantized, tintColor,
-                duplicateBackfaces ? ObjMeshCube.Backface.DOUBLE : ObjMeshCube.Backface.SINGLE);
+        mesh = this.part != null
+                // bbmodel：静态姿态一份几何（剔不剔除背面由绘制时的 cull 决定，不需要两份拷贝）
+                ? ObjGpuMesh.bakeModelPart(this.part, quantized, tintColor)
+                : ObjGpuMesh.bake(this.groups, quantized, tintColor,
+                        duplicateBackfaces ? ObjMeshCube.Backface.DOUBLE : ObjMeshCube.Backface.SINGLE);
+        if (this.part != null && this.triangles == 0) {
+            this.triangles = mesh.triangles();
+        }
         if (this.variants.size() >= MAX_VARIANTS) {
             Iterator<Map.Entry<Long, ObjGpuMesh>> it = this.variants.entrySet().iterator();
             if (it.hasNext()) {

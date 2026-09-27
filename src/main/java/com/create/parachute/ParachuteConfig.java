@@ -48,6 +48,11 @@ public final class ParachuteConfig {
     public static final ModConfigSpec.IntValue VIEW_DISTANCE;
 
     /**
+     * 伞贴图的显存预算（MB，0 = 不限）。吃满后停止加载后续伞的贴图，并回收长期未使用的伞来腾地方。
+     */
+    public static final ModConfigSpec.IntValue TEXTURE_BUDGET_MB;
+
+    /**
      * 伞模型（不透明层）的几何 / 剔除策略，<b>开不开光影都用同一套</b>（这样两种情况外观一致）。
      *
      * <p>背景：光影包的延迟着色只认<b>顶点法线</b>（例如 Photon 的 gbuffer 平面法线 =
@@ -185,6 +190,15 @@ public final class ParachuteConfig {
                          "装了提高渲染距离/区块缓存的模组才能真正用到大数值。")
                 .defineInRange("viewDistance", 512, 0, 65536);
 
+        TEXTURE_BUDGET_MB = b
+                .comment("伞贴图的显存预算，单位 MB；0 = 不限（默认 512）。",
+                         "只统计本模组自己上传的贴图（原生贴图 + 染色用白底贴图 + OBJ 的每材质贴图，含 mip 链约 ×1.33）。",
+                         "用到预算上限后，后面的伞不会加载贴图（该伞暂时按默认蘑菇伞显示），",
+                         "并且会回收「超过 20 秒没被取用」的伞来腾地方，腾出来就自动继续加载 ——",
+                         "所以只有同时在场、又超过预算的伞会退化成默认伞，日志里会有明确提示。",
+                         "改小可以显著省显存，代价是同一时间能看到的不同伞少一些。")
+                .defineInRange("textureBudgetMB", 512, 0, 16384);
+
         SHADERS_GEOMETRY = b
                 .comment("伞模型不透明层的几何/剔除策略，**开不开光影都用这一套**（两种情况外观一致）。",
                          "顶点数是一倍还是两倍，帧数差别很大：实测 98 万面的 AH-64D 在 Photon 下",
@@ -199,6 +213,9 @@ public final class ParachuteConfig {
                          "  Photon 把 shaders/program/gbuffers_all_solid.fsh 里的 `#define flat_normal tbn[2]`",
                          "  改成 `#define flat_normal (gl_FrontFacing ? tbn[2] : -tbn[2])` 即可。",
                          "半透明层固定「两份 + 剔除」（不剔除的话正反面片元会各混合一次，颜色明显加深）；",
+                         "另外会自动检测「单面片」：模型里有零厚度的平面/薄壳（比如内置蘑菇伞那两块贴图板）时，",
+                         "  该模型的不透明层改用不剔除背面的 RenderType（bbmodel）/ 给这些组强制发两份（OBJ 烘焙），",
+                         "  不受上面这个选项影响 —— 否则薄片从背面看会整片消失。普通模型仍然照上面的策略剔除。",
                          "逐帧发射路径（低于 2 万面的小模型）读的是加载时的配置值，改配置后重新加载该伞生效。")
                 .defineEnum("shadersGeometry", ShadersGeometry.SINGLE_CULL);
 

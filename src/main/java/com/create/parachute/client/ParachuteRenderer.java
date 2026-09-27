@@ -76,16 +76,25 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
      */
     @Override
     public AABB getRenderBoundingBox(ParachuteBlockEntity be) {
+        // 半径已经是"球半径 + 枢轴/整体偏移 + 余量"，直接用它膨胀，别再拿 RENDER_BOX_MIN 兜底抬到 16 格 ——
+        // 那会让小伞（蘑菇伞半径约 2 格）也顶着一个 33 格的盒子，剔除彻底失效。
+        return new AABB(be.getBlockPos()).inflate(radiusOf(be));
+    }
+
+    /**
+     * 这把伞的渲染球半径（格）：模型几何半径 × 整体缩放 + 枢轴/整体偏移 + 1 格余量；
+     * 半径拿不到（模型没解析出来）时退回 {@link #RENDER_BOX_MIN}。
+     */
+    private static double radiusOf(ParachuteBlockEntity be) {
         BakedParachute parachute = ParachuteAssets.get(be.getParachuteName());
-        double radius = RENDER_BOX_MIN;
-        if (parachute != null && parachute.renderRadius() > 0.0F) {
-            // 模型绕枢轴旋转/摆动，所以用"球半径"（旋转无关）；再把枢轴和整体偏移算进去，保守但不会切掉模型
-            radius = parachute.renderRadius() * Math.max(0.001F, be.getRenderScale())
-                    + Math.abs(be.getPivotX()) + Math.abs(be.getPivotY()) + Math.abs(be.getPivotZ())
-                    + Math.abs(be.getOffX()) + Math.abs(be.getOffY()) + Math.abs(be.getOffZ())
-                    + 1.0D;
+        if (parachute == null || parachute.renderRadius() <= 0.0F) {
+            return RENDER_BOX_MIN;
         }
-        return new AABB(be.getBlockPos()).inflate(Math.max(RENDER_BOX_MIN, radius));
+        // 模型绕枢轴旋转/摆动，所以用"球半径"（旋转无关）；再把枢轴和整体偏移算进去，保守但不会切掉模型
+        return parachute.renderRadius() * Math.max(0.001F, be.getRenderScale())
+                + Math.abs(be.getPivotX()) + Math.abs(be.getPivotY()) + Math.abs(be.getPivotZ())
+                + Math.abs(be.getOffX()) + Math.abs(be.getOffY()) + Math.abs(be.getOffZ())
+                + 1.0D;
     }
 
     /**
@@ -93,10 +102,13 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
      *
      * <p>配合 {@link #getRenderBoundingBox} 一起用：前者管 section 级剔除，后者管 NeoForge
      * 那个按渲染包围盒的视锥判断。</p>
+     *
+     * <p><b>只对"比一个区块截面还大"的模型开</b>：小伞（蘑菇伞半径约 1 格）走正常 section 通道就够了，
+     * 每把伞都开的话，多放几把就会把全部伞无条件塞进渲染循环 —— 那是"放多了帧数爆炸"的一部分原因。</p>
      */
     @Override
     public boolean shouldRenderOffScreen(ParachuteBlockEntity be) {
-        return true;
+        return radiusOf(be) > 6.0D;
     }
 
     /**
@@ -211,7 +223,9 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
                 int a = Math.round(((color >>> 24) & 0xFF) * layer.alpha());
                 layerColor = (color & 0x00FFFFFF) | (a << 24);
             }
-            if (layer.gpu() != null) {
+            if (layer.gpu() != null
+                    // bbmodel 烘的是"完全展开"的静态姿态，所以正在开伞的那几帧走逐帧发射，别用静态缓冲
+                    && (parachute.openAnimation() == null || ratio >= 0.999F)) {
                 // 高面数模型：顶点常驻显存，这里只 bind + draw（光照/染色烘在缓冲里，行为和逐帧发射一致）。
                 // 几何份数 / 是否剔除背面（见 ObjMeshCube.Backface 与 ParachuteConfig.ShadersGeometry）：
                 //   半透明层 → 固定两份 + 剔除（不剔除的话正反面片元各混合一次，颜色会明显加深）
@@ -240,9 +254,12 @@ public class ParachuteRenderer implements BlockEntityRenderer<ParachuteBlockEnti
             //   一份几何时，剔除保证"画出来的片元法线一定朝向相机"，光照必然正确（薄片背面会消失）。
             // 这条路径用的是原版 RenderType，没有自有着色器，所以拿不到 gl_FrontFacing 那条更省的做法。
             // 半透明层本来就该剔除（玻璃球罩不剔除时正/背面与内层会叠在一起，看着像一堆三角锯齿）。
+            // 例外 —— 模型里有"单面片"（零厚度贴图板，比如内置蘑菇伞）时，不透明层改成不剔除背面：
+            // 这种薄片只发一份几何，剔除会让它从背面整个消失。半透明层不改（不剔除会双重混合）。
+            boolean noCull = parachute.flatParts() && !layer.translucent();
             VertexConsumer layerVc = buffer.getBuffer(layer.translucent()
                     ? RenderType.entityTranslucentCull(layerTex)
-                    : RenderType.entityCutout(layerTex));
+                    : noCull ? RenderType.entityCutoutNoCull(layerTex) : RenderType.entityCutout(layerTex));
             layer.model().render(poseStack, layerVc, brightLight, packedOverlay, layerColor);
         }
 

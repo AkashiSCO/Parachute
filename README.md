@@ -51,6 +51,15 @@ Build a parachute onto your vehicle, deploy it with a redstone pulse, and glide 
     (yellow in seat mode) and the model's axes
 - **Parachute selection GUI** — scrollable list of parachutes, open the game's `parachute/` folder in your file explorer
 - **Dye support** — recolor a placed parachute with any dye; restore the original with an axe
+- **Single-sided parts stay visible** — models containing zero-thickness planes/shells (the built-in mushroom's
+  two texture cards, for instance) are detected on load: their opaque layers skip backface culling (bbmodel) or
+  get both windings baked in (OBJ), so a flat part never disappears when you look at it from behind. Ordinary
+  models keep the `shadersGeometry` culling policy unchanged
+- **Texture VRAM budget** — `visual.textureBudgetMB` (default 512, `0` = unlimited) caps how much VRAM the
+  mod's own parachute textures may use (original + dye-white + per-material OBJ textures, mip chain included).
+  Once it is used up, further parachutes keep showing the default mushroom until there is room again:
+  parachutes unused for 20 seconds are released (textures and vertex buffers) and reloaded on demand, so a
+  chute only falls back while the visible set genuinely exceeds the budget. The log says when that happens
 - **Seat parachute pack** — a wrench (Create's or any `c:tools/wrench`) or a debug stick right-click toggles a pack
   between the normal form and a cushion you can sit on. Empty-hand right-click sits down (sneak to get off),
   Shift + right-click opens the usual controller GUI, and everything else (deploy/retract, dye, redstone,

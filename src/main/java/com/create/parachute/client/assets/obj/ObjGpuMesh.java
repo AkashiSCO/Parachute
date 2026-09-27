@@ -8,6 +8,7 @@ import com.mojang.blaze3d.vertex.MeshData;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexBuffer;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.ShaderInstance;
@@ -73,6 +74,33 @@ public final class ObjGpuMesh implements AutoCloseable {
     }
 
     /** 必须在渲染线程调用（会创建/上传 GL 缓冲）：把一个层里的所有组烘进同一个缓冲 */
+    /**
+     * bbmodel 路径：把一棵 {@code ModelPart}（当前姿态）烘成 GPU 缓冲。
+     *
+     * <p>顶点格式/图元模式必须和原版 RenderType（{@code entityCutout} / {@code entityTranslucentCull}）
+     * 一致：{@code QUADS} + {@code NEW_ENTITY}，这样绘制时可以直接用原版渲染类型的着色器
+     * （Iris 会把原版程序替换成光影包的，所以开光影也能画出来，和 OBJ 那条烘焙路径同一个道理）。</p>
+     */
+    public static ObjGpuMesh bakeModelPart(ModelPart root, int packedLight, int tintColor) {
+        VertexBuffer buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
+        MeshData data = null;
+        int triangles = 0;
+        try (ByteBufferBuilder bytes = new ByteBufferBuilder(1 << 20)) {
+            BufferBuilder builder = new BufferBuilder(bytes, VertexFormat.Mode.QUADS, DefaultVertexFormat.NEW_ENTITY);
+            root.render(IDENTITY, builder, packedLight, OverlayTexture.NO_OVERLAY, tintColor);
+            data = builder.buildOrThrow();
+            triangles = data.drawState().vertexCount() / 4 * 2;
+            buffer.bind();
+            buffer.upload(data);
+            VertexBuffer.unbind();
+        } finally {
+            if (data != null) {
+                data.close();
+            }
+        }
+        return new ObjGpuMesh(buffer, triangles);
+    }
+
     public static ObjGpuMesh bake(List<ObjMesh.Group> groups, int packedLight, int tintColor,
                                   ObjMeshCube.Backface backface) {
         VertexBuffer buffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
@@ -83,10 +111,12 @@ public final class ObjGpuMesh implements AutoCloseable {
             BufferBuilder builder = new BufferBuilder(bytes, VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.NEW_ENTITY);
             for (ObjMesh.Group group : groups) {
                 if (group.cornerCount() <= 0) continue;
+                // 单面片（平面/薄壳）强制发两份：只发一份又被背面剔除的话，从背面看整片都会消失
+                ObjMeshCube.Backface bf = group.flat() ? ObjMeshCube.Backface.DOUBLE : backface;
                 // 复用现有发射逻辑；单位姿态 + 真实光照 + 染色/不透明度（都烘进顶点）
-                new ObjMeshCube(group, backface).compileTriangles(IDENTITY.last(), builder, packedLight,
+                new ObjMeshCube(group, bf).compileTriangles(IDENTITY.last(), builder, packedLight,
                         OverlayTexture.NO_OVERLAY, tintColor);
-                triangles += group.cornerCount() / 3;
+                triangles += group.cornerCount() / 3 * (bf == ObjMeshCube.Backface.DOUBLE ? 2 : 1);
             }
             data = builder.buildOrThrow();
             buffer.bind();

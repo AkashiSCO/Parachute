@@ -361,6 +361,31 @@ public final class BbModelParser {
         }
     }
 
+    /**
+     * 模型里有没有"单面片"：某个元素在某个轴上厚度≈0（典型是一张平面贴图板，比如内置蘑菇伞那两块
+     * {@code from=[-8,0,0] to=[8,16,0]}）。这种块只发一份几何时，从背面看会整片消失（背面剔除），
+     * 所以渲染器对这类模型的不透明层改用"不剔除背面"的 RenderType。
+     *
+     * <p>直接读 JSON 的 {@code from}/{@code to}（编辑器单位，1 = 1/16 格）—— {@code ModelPart.cubes}
+     * 是私有的，而这里只要判断"有没有零厚度的元素"就够了。</p>
+     */
+    public static boolean hasFlatElement(JsonObject root) {
+        JsonArray elements = GsonHelper.getAsJsonArray(root, "elements", new JsonArray());
+        for (JsonElement e : elements) {
+            if (!e.isJsonObject()) continue;
+            JsonObject el = e.getAsJsonObject();
+            if (!isExported(el)) continue;
+            float[] fr = floats(el, "from", new float[]{0, 0, 0});
+            float[] to = floats(el, "to", new float[]{0, 0, 0});
+            if (Math.abs(to[0] - fr[0]) < 1.0E-3F
+                    || Math.abs(to[1] - fr[1]) < 1.0E-3F
+                    || Math.abs(to[2] - fr[2]) < 1.0E-3F) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** 读取 meta.model_format；缺省视为 modded_entity */
     private static String modelFormat(JsonObject root) {
         JsonObject meta = GsonHelper.getAsJsonObject(root, "meta", new JsonObject());

@@ -37,9 +37,11 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 客户端伞资源管理器（热加载）：按<b>伞源</b>扫描并解析每把伞的 .bbmodel
@@ -90,14 +92,17 @@ public final class ParachuteAssets {
      *
      * @param renderRadius 模型几何到自身原点的最大距离（格），用来算渲染包围盒（视锥剔除用）；
      *                     0 = 拿不到（bbmodel 等），渲染器会用默认值兜底
+     * @param flatParts    模型里有没有"单面片"（零厚度的平面/薄壳，比如蘑菇伞那张贴图板）。
+     *                     有的话这一层的**不透明**部分不剔除背面（{@code entityCutoutNoCull}），
+     *                     否则薄片从背面看会整个消失；OBJ 烘焙路径则是给这些组强制发两份几何。
      */
     public record BakedParachute(String id, List<Layer> layers, AnimationDefinition openAnimation,
-                                 float lengthSeconds, boolean bedrock, float renderRadius) {
+                                 float lengthSeconds, boolean bedrock, float renderRadius, boolean flatParts) {
 
         /** 兼容构造：没有几何半径信息（bbmodel 等） */
         public BakedParachute(String id, List<Layer> layers, AnimationDefinition openAnimation,
                               float lengthSeconds, boolean bedrock) {
-            this(id, layers, openAnimation, lengthSeconds, bedrock, 0.0F);
+            this(id, layers, openAnimation, lengthSeconds, bedrock, 0.0F, false);
         }
 
         /** 主层：单贴图模型就是唯一那层（动画、染色兜底都看它） */
@@ -136,8 +141,8 @@ public final class ParachuteAssets {
         }
     }
 
-    /** 一把伞的实际位置：所在文件夹 + 来源标签（{@code local} 或 {@code server/<文件夹名>}） */
-    private record Entry(Path dir, String source) {
+    /** 一把伞的实际位置：所在文件夹 + 来源标签 + 缓存 key（key 预拼好，渲染每帧都会用到，别在热路径里拼字符串） */
+    private record Entry(Path dir, String source, String key) {
     }
 
     /** 缓存 key = 来源标签 + "/" + 纯伞名 */
@@ -149,6 +154,41 @@ public final class ParachuteAssets {
     private static final Map<String, Long> signatures = new HashMap<>();
     private static long lastScan;
     private static boolean loggedInitial;
+
+    // ============================================================
+    // 贴图显存预算（只统计本模组上传的贴图，见 ParachuteConfig.TEXTURE_BUDGET_MB）
+    // ============================================================
+
+    /** 当前已记账的贴图字节数（含 mip 链，约 ×1.33） */
+    private static long gpuBytes;
+    /** 每把伞占用的字节数（0 表示没贴图） */
+    private static final Map<String, Long> keyBytes = new HashMap<>();
+    /** 每把伞注册过的贴图位置，释放时逐个 TextureManager.release */
+    private static final Map<String, List<ResourceLocation>> keyTextures = new HashMap<>();
+    /** 每把伞最近一次被取用的时间（毫秒）：超预算时只回收长期没用到的 */
+    private static final Map<String, Long> keyUsedAt = new HashMap<>();
+    /** 已经因为预算不足报过日志的伞，避免每 200ms 刷屏 */
+    private static final Set<String> budgetWarned = new HashSet<>();
+    /** 正在加载的这把伞累计注册了哪些贴图/多少字节（loadOne 入口清零，refresh 里取走） */
+    private static long loadBytes;
+    private static List<ResourceLocation> loadTextures = new ArrayList<>();
+    /** 超预算时，多久没被取用的伞可以回收（毫秒） */
+    private static final long UNLOAD_IDLE_MS = 20_000L;
+
+    /** 显存预算（字节）；配置为 0 表示不限 */
+    private static long textureBudgetBytes() {
+        int mb = ParachuteConfig.TEXTURE_BUDGET_MB.get();
+        return mb <= 0 ? Long.MAX_VALUE : (long) mb * 1024L * 1024L;
+    }
+
+    private static void clearLoadAccounting() {
+        loadBytes = 0L;
+        loadTextures = new ArrayList<>();
+    }
+
+    private static String mb(long bytes) {
+        return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / 1048576.0D);
+    }
 
     private static String keyOf(String source, String id) {
         return source + "/" + id;
@@ -179,7 +219,15 @@ public final class ParachuteAssets {
      * <p>低于它保持原来的逐帧发射路径；高于它只是把顶点搬到显存里（渲染状态、光照、剔除行为
      * 都和逐帧发射完全一致），换来每帧不再有 O(顶点数) 的 CPU 开销。</p>
      */
-    private static final int BAKE_MIN_TRIANGLES = 20_000;
+    /**
+     * 烘焙门槛（三角形数）：超过就烘成 GPU 顶点缓冲，之后每帧只 bind + draw，不再逐帧发射顶点。
+     *
+     * <p>以前是 2 万面 —— 于是 2 万面以下的伞（4~15k 面的那些）每帧都要把全部顶点重新写进
+     * 缓冲区，多放几把就是几十 MB/帧，帧数直接爆炸。显存不是瓶颈（用户实测），所以门槛压到
+     * 500：这点显存换掉每帧的 CPU→GPU 顶点流，非常划算（内置蘑菇伞只有 24 面，仍走逐帧发射，
+     * 那种规模烘一份反而更亏）。</p>
+     */
+    private static final int BAKE_MIN_TRIANGLES = 500;
 
     private ParachuteAssets() {
     }
@@ -196,7 +244,15 @@ public final class ParachuteAssets {
     private static BakedParachute lookup(@Nullable String name) {
         if (name == null || name.isEmpty() || entries == null) return null;
         Entry entry = entries.get(name);
-        return entry == null ? null : cache.get(keyOf(entry.source(), name));
+        if (entry == null) return null;
+        // 记录"最近被取用"：超预算时只回收长期没人用的伞（渲染路径每帧都会 get，所以看得见的伞永远是新鲜的）。
+        // 这里是每帧热路径，节流成 2 秒一次写，省掉每帧一次装箱 map 写。
+        long now = System.currentTimeMillis();
+        Long last = keyUsedAt.get(entry.key());
+        if (last == null || now - last > 2000L) {
+            keyUsedAt.put(entry.key(), now);
+        }
+        return cache.get(entry.key());
     }
 
     /** 该伞是否为 bedrock 模式（lav25 之类）。影响渲染朝向补偿：bedrock 需额外绕 Y 旋转。 */
@@ -267,7 +323,7 @@ public final class ParachuteAssets {
                     String id = dir.getFileName().toString();
                     if (found.containsKey(id)) continue;
                     if (findModel(dir) == null) continue;
-                    found.put(id, new Entry(dir, source.label()));
+                    found.put(id, new Entry(dir, source.label(), keyOf(source.label(), id)));
                 }
             } catch (IOException e) {
                 ParachuteMod.LOGGER.warn("Failed to scan parachute source '{}': {}", root, e.toString());
@@ -275,6 +331,11 @@ public final class ParachuteAssets {
         }
 
         Map<String, BakedParachute> next = new HashMap<>();
+        long budget = textureBudgetBytes();
+        // 已经超预算：先回收"超过 UNLOAD_IDLE_MS 没被取用"的伞，腾出地方好继续加载
+        if (gpuBytes > budget) {
+            reclaimIdleParachutes(now);
+        }
         for (Map.Entry<String, Entry> e : found.entrySet()) {
             String id = e.getKey();
             Entry entry = e.getValue();
@@ -283,14 +344,34 @@ public final class ParachuteAssets {
             Long old = signatures.get(key);
             BakedParachute baked = cache.get(key);
             if (baked == null || old == null || old != sig) {
+                // 显存预算吃满：这把伞这轮先不加载（也不动 signatures，所以下一轮扫描会自动重试）。
+                // 已经加载过的旧版本继续用，别把能用的东西丢掉。
+                if (gpuBytes >= budget) {
+                    if (budgetWarned.add(key)) {
+                        ParachuteMod.LOGGER.warn(
+                                "贴图显存预算已满（{} / {}），暂时不加载 '{}({})' 的贴图，等有空间自动重试；"
+                                        + "可在配置 visual.textureBudgetMB 调整上限（0 = 不限）",
+                                mb(gpuBytes), mb(budget), id, entry.source());
+                    }
+                    if (baked != null) {
+                        next.put(key, baked);
+                    }
+                    continue;
+                }
                 signatures.put(key, sig);
-                // 要重载了：先把旧的 GPU 缓冲释放掉，否则显存泄漏
+                // 要重载了：先把旧的 GPU 缓冲和贴图释放掉，否则显存泄漏
                 if (baked != null) {
-                    closeGpu(key, baked);
+                    releaseAssets(key, baked);
                 }
                 baked = loadOne(entry.dir(), id, entry.source());
                 if (baked != null) {
-                    ParachuteMod.LOGGER.info("Hot-loaded parachute '{}' from {}", id, entry.source());
+                    // 记账：这把伞这次注册了哪些贴图、占多少（用于超预算回收 / 释放）
+                    keyBytes.put(key, loadBytes);
+                    keyTextures.put(key, List.copyOf(loadTextures));
+                    gpuBytes += loadBytes;
+                    budgetWarned.remove(key);
+                    ParachuteMod.LOGGER.info("Hot-loaded parachute '{}' from {} (textures {}, total {}/{})",
+                            id, entry.source(), mb(loadBytes), mb(gpuBytes), mb(budget));
                 } else {
                     ParachuteMod.LOGGER.warn("Parachute '{}' failed to load; removed", key);
                     continue;
@@ -302,9 +383,10 @@ public final class ParachuteAssets {
         // 移除已删除的伞
         for (String gone : new ArrayList<>(cache.keySet())) {
             if (!next.containsKey(gone)) {
-                closeGpu(gone, cache.get(gone));
+                releaseAssets(gone, cache.get(gone));
                 cache.remove(gone);
                 signatures.remove(gone);
+                keyUsedAt.remove(gone);
                 ParachuteMod.LOGGER.info("Removed parachute '{}' (folder gone)", gone);
             }
         }
@@ -320,15 +402,55 @@ public final class ParachuteAssets {
         }
     }
 
-    /** 释放一把伞占用的 GPU 缓冲（热重载/删除时调用；必须在渲染线程） */
-    private static void closeGpu(String key, @Nullable BakedParachute baked) {
-        if (baked == null) return;
-        for (Layer layer : baked.layers()) {
-            if (layer.gpu() != null) {
-                layer.gpu().close();
+    /**
+     * 释放一把伞占用的显存：GPU 顶点缓冲 + 本模组注册的贴图（热重载 / 删除 / 超预算回收时调用；
+     * 必须在渲染线程）。贴图以前从不释放，热重载时旧的会一直留在显存里 —— 顺手修掉了。
+     */
+    private static void releaseAssets(String key, @Nullable BakedParachute baked) {
+        if (baked != null) {
+            for (Layer layer : baked.layers()) {
+                if (layer.gpu() != null) {
+                    layer.gpu().close();
+                }
             }
         }
-        ParachuteMod.LOGGER.debug("Released GPU buffers of '{}'", key);
+        List<ResourceLocation> textures = keyTextures.remove(key);
+        if (textures != null) {
+            for (ResourceLocation loc : textures) {
+                Minecraft.getInstance().getTextureManager().release(loc);
+            }
+        }
+        Long bytes = keyBytes.remove(key);
+        if (bytes != null) {
+            gpuBytes = Math.max(0L, gpuBytes - bytes);
+        }
+        ParachuteMod.LOGGER.debug("Released GPU buffers + textures of '{}'", key);
+    }
+
+    /**
+     * 超预算时回收「{@link #UNLOAD_IDLE_MS} 毫秒没被取用」的伞：释放它们的贴图/顶点缓冲，
+     * 下次再被用到会按需重新加载。渲染路径每帧都会 {@code get()}，所以正在看得见的伞永远是新鲜的，
+     * 只有离得远/已经不在场景里的伞才会被回收。
+     */
+    private static void reclaimIdleParachutes(long now) {
+        long budget = textureBudgetBytes();
+        for (String key : new ArrayList<>(cache.keySet())) {
+            if (gpuBytes <= budget) {
+                break;
+            }
+            Long used = keyUsedAt.get(key);
+            // used == null：加载出来后一次都没被取用（不可能在渲染中）→ 也可以回收
+            if (used != null && now - used < UNLOAD_IDLE_MS) {
+                continue;
+            }
+            long freed = keyBytes.getOrDefault(key, 0L);
+            releaseAssets(key, cache.get(key));
+            cache.remove(key);
+            signatures.remove(key);
+            keyUsedAt.remove(key);
+            ParachuteMod.LOGGER.info("贴图显存预算吃满：回收长期未使用的伞 '{}'（释放 {}，现 {} / {}）",
+                    key, mb(freed), mb(gpuBytes), mb(budget));
+        }
     }
 
     /** 应用开伞动画：按比例把动画时间映射到 [0, length]，驱动骨骼关键帧 */
@@ -396,6 +518,7 @@ public final class ParachuteAssets {
 
     @Nullable
     private static BakedParachute loadOne(Path dir, String id, String source) {
+        clearLoadAccounting();
         Path bbFile = findBbmodel(dir);
         if (bbFile == null) {
             // Blender OBJ 工作流：没有 .bbmodel 时按 <伞名>/xxx.obj + xxx.mtl + textures/ 加载
@@ -429,12 +552,75 @@ public final class ParachuteAssets {
                     GsonHelper.getAsString(GsonHelper.getAsJsonObject(root, "meta", new JsonObject()),
                             "model_format", "modded_entity"));
 
-            return new BakedParachute(id, List.of(new Layer(modelPart, texture, whiteTexture)),
-                    anim, lengthSeconds, bedrock);
+            // 静态姿态烘焙：bbmodel 以前从不烘，每帧都要把整把伞的顶点重新写进缓冲区 —— 放几把就几十 MB/帧。
+            // 这里按"开伞动画完全展开"的姿态烘一份；烘完 resetPose 复原，正在开伞的几帧仍走逐帧发射。
+            ObjGpuCache gpu = null;
+            if (modelPart != null
+                    && !Boolean.getBoolean("parachute.debug.nogpu")
+                    && estimateTriangles(root) >= BAKE_MIN_TRIANGLES) {
+                if (anim != null) {
+                    applyOpenAnimation(modelPart, anim, 1.0F, new Vector3f());
+                }
+                gpu = new ObjGpuCache(modelPart);
+                // 烘完恢复定义姿态：逐帧发射那条路径每帧都会自己 resetPose + 应用动画
+                modelPart.getAllParts().forEach(ModelPart::resetPose);
+            }
+
+            return new BakedParachute(id, List.of(new Layer(modelPart, gpu, texture, whiteTexture, false, 1.0F)),
+                    anim, lengthSeconds, bedrock, modelRadius(root), BbModelParser.hasFlatElement(root));
         } catch (Exception e) {
             ParachuteMod.LOGGER.warn("Failed to load parachute '{}/{}': {}", source, id, e.toString());
             return null;
         }
+    }
+
+    /**
+     * bbmodel 的几何半径（格）：元素 {@code from}/{@code to} 八个角到模型原点的最大距离（编辑器单位 ÷16）。
+     *
+     * <p>给渲染包围盒用 —— 以前 bbmodel 一律返回 0，渲染器只好按默认 16 格兜底，于是"多放几把伞"时
+     * 每把伞的盒子都是 33 格见方，视锥剔除形同虚设、全都进渲染循环。算出来之后小伞（蘑菇伞半径约 1 格）
+     * 的盒子就贴着模型了。</p>
+     */
+    private static float modelRadius(JsonObject root) {
+        float maxSq = 0.0F;
+        for (JsonElement e : GsonHelper.getAsJsonArray(root, "elements", new JsonArray())) {
+            if (!e.isJsonObject()) continue;
+            JsonObject el = e.getAsJsonObject();
+            if (!GsonHelper.getAsBoolean(el, "export", true)) continue;
+            float[] fr = floatsOf(el, "from");
+            float[] to = floatsOf(el, "to");
+            if (fr == null || to == null) continue;
+            for (int i = 0; i < 8; i++) {
+                float x = ((i & 1) == 0 ? fr[0] : to[0]) / 16.0F;
+                float y = ((i & 2) == 0 ? fr[1] : to[1]) / 16.0F;
+                float z = ((i & 4) == 0 ? fr[2] : to[2]) / 16.0F;
+                maxSq = Math.max(maxSq, x * x + y * y + z * z);
+            }
+        }
+        // ×1.2 + 1 格余量：开伞动画会把部件甩出去一点，别在动画中途被剔掉
+        return (float) (Math.sqrt(maxSq) * 1.2D + 1.0D);
+    }
+
+    /**
+     * bbmodel 三角形数估算：每个导出元素最多 6 个 quad = 12 个三角形（零厚度块的侧面是退化的，
+     * 所以这是上限）。只用来决定"要不要烘"，宁可高估。
+     */
+    private static int estimateTriangles(JsonObject root) {
+        int count = 0;
+        for (JsonElement e : GsonHelper.getAsJsonArray(root, "elements", new JsonArray())) {
+            if (e.isJsonObject() && GsonHelper.getAsBoolean(e.getAsJsonObject(), "export", true)) {
+                count++;
+            }
+        }
+        return count * 12;
+    }
+
+    @Nullable
+    private static float[] floatsOf(JsonObject obj, String key) {
+        if (!obj.has(key)) return null;
+        JsonArray arr = GsonHelper.getAsJsonArray(obj, key, new JsonArray());
+        if (arr.size() < 3) return null;
+        return new float[]{arr.get(0).getAsFloat(), arr.get(1).getAsFloat(), arr.get(2).getAsFloat()};
     }
 
     // ============================================================
@@ -456,6 +642,7 @@ public final class ParachuteAssets {
      */
     @Nullable
     private static BakedParachute loadObjParachute(Path dir, String id, String source) {
+        clearLoadAccounting();
         Path objFile = findObj(dir);
         if (objFile == null) return null;
 
@@ -614,7 +801,8 @@ public final class ParachuteAssets {
         ParachuteMod.LOGGER.info("OBJ parachute '{}/{}': render radius {} block(s)", source, id,
                 String.format("%.1f", renderRadius));
 
-        return new BakedParachute(id, List.copyOf(layers), null, 1.0F, false, renderRadius);
+        return new BakedParachute(id, List.copyOf(layers), null, 1.0F, false, renderRadius,
+                mesh.groups().stream().anyMatch(ObjMesh.Group::flat));
     }
 
     /**
@@ -889,11 +1077,17 @@ public final class ParachuteAssets {
     /** 贴图最大边长：超过就盒式降采样（2048² → 1024²，显存省 4×，也顺带减轻摩尔纹） */
     private static final int MAX_TEXTURE_SIZE = 1024;
 
-    /** 注册并上传贴图（refresh 均在渲染线程调用，GL 操作安全） */
+    /** 注册并上传贴图（refresh 均在渲染线程调用，GL 操作安全）；顺带记进这把伞的显存账 */
     private static void registerTexture(ResourceLocation location, NativeImage image) {
-        ParachuteTexture texture = new ParachuteTexture(downscaleIfNeeded(image));
+        NativeImage ready = downscaleIfNeeded(image);
+        int w = ready.getWidth();
+        int h = ready.getHeight();
+        ParachuteTexture texture = new ParachuteTexture(ready);
         Minecraft.getInstance().getTextureManager().register(location, texture);
         texture.load(Minecraft.getInstance().getResourceManager());
+        // 记账：GPU 里是 4 级 mip 链（ParachuteTexture.MIP_LEVELS），比 level0 大约 1.33 倍
+        loadBytes += (long) w * (long) h * 4L * 4L / 3L;
+        loadTextures.add(location);
     }
 
     /** 盒式降采样：超过 {@link #MAX_TEXTURE_SIZE} 时缩小，否则原样返回（会关掉入参） */
