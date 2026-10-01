@@ -43,6 +43,20 @@ public interface SynaxisChairSupport {
     @Nullable
     Object networkSupport();
 
+    /**
+     * 幽灵椅子对象本身（Synaxis 的 {@code ControlChairBlockEntity}）。
+     *
+     * <p>客户端相机栈是<b>按坐标</b>取椅子的
+     * （{@code ClientControlChairManager#getActiveChairBlockEntity}：{@code level.getBlockEntity(pos)
+     * instanceof ControlChairBlockEntity}）。那个坐标上坐着的其实是伞包 BE，所以拿不到椅子，
+     * 结果就是「坐在上面了、按键也接管了，但第三人称偏移缩放这类<b>椅子自己的</b>参数不生效」。
+     * 门控 mixin 会用它补上这一环。</p>
+     *
+     * @return 椅子对象；幽灵椅子不存在时为 {@code null}
+     */
+    @Nullable
+    Object chairObject();
+
     /** 拆掉椅子（注销电路外设、清理信号与会话）。 */
     void release();
 }

@@ -172,6 +172,12 @@ public final class SynaxisChairBridge implements SynaxisChairSupport {
     }
 
     @Override
+    @Nullable
+    public Object chairObject() {
+        return this.chair;
+    }
+
+    @Override
     public void release() {
         // remove()/invalidate() 是 BlockEntity 的生命周期回调，椅子的实现会顺便注销电路外设、
         // 清控制器线缆信号、释放输入会话（比它自己的 destroy() 更安全，不会触发掉落之类）

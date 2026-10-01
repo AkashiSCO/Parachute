@@ -293,6 +293,22 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     }
 
     /**
+     * 幽灵控制椅对象本身（Synaxis 的 {@code ControlChairBlockEntity}），没装 Synaxis
+     * 或不是坐垫模式时为 {@code null}。
+     *
+     * <p>给门控 mixin 用：Synaxis 的客户端相机栈是「按坐标取椅子 BE、再读椅子自己的参数」
+     * （第三人称偏移缩放、视图旋转模式、视角锁定等都在那上面）。那个坐标上坐着的是伞包 BE，
+     * 所以要把幽灵椅子交出去，否则这些<b>椅子专属</b>的参数永远读不到、改了也不生效。</p>
+     */
+    @Nullable
+    public Object synaxisChairObject() {
+        if (this.synaxisChair == null) {
+            ensureSynaxisChair();
+        }
+        return this.synaxisChair == null ? null : this.synaxisChair.chairObject();
+    }
+
+    /**
      * 确保幽灵控制椅已经建立，返回是否可用。
      *
      * <p>给"界面宿主"用：客户端那侧的幽灵椅子是懒建立的（在 BE 第一次 tick 里建），
