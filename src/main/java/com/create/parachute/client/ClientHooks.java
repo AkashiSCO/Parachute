@@ -43,6 +43,16 @@ public final class ClientHooks {
     }
 
     /**
+     * 打开 Synaxis 控制椅的绑定界面（坐垫模式伞包 + 手持烈焰棒右键）。
+     *
+     * <p>界面是客户端 Screen，且 Synaxis 缺席时本方法什么都不做（内部短路），
+     * 所以公共类可以放心调用——签名里没有任何客户端类型。</p>
+     */
+    public static void openSynaxisChairBindings() {
+        com.create.parachute.compat.synaxis.SynaxisChairUi.openBindingsScreen();
+    }
+
+    /**
      * 该伞是否使用基岩版（bedrock）模型格式。
      * <p>影响渲染朝向补偿：bedrock 模型 X 轴语义相反，不需要额外的 -90° 绕 Y 旋转。
      * 只有客户端持有伞的模型数据，所以服务端不参与该判断。</p>

@@ -51,8 +51,10 @@ and glide down safely. Drop a .bbmodel + .png into <game root>/parachute/ to add
 '''
 
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
-#[[mixins]]
-#config="${mod_id}.mixins.json"
+# 本模组只用 mixin 做「可选的跨模组兼容补丁」（例如装了 Synaxis 时让控制椅认识伞包席位），
+# 由 ParachuteMixinPlugin 按目标 mod 是否存在逐个门控，没装对应 mod 时不会应用。
+[[mixins]]
+config="${mod_id}.mixins.json"
 
 # The [[accessTransformers]] block allows you to declare where your AT file is.
 # If this block is omitted, a fallback attempt will be made to load an AT from META-INF/accesstransformer.cfg

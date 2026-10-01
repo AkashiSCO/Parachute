@@ -24,6 +24,22 @@ sourceSets.main.resources {
     exclude("src/generated/**/.cache") // datagen cache files
 }
 
+// ---------------------------------------------------------------------------
+// 编译期桩源集（src/stubs/java）
+//
+// 背景：坐垫模式的伞包要在装了 Synaxis 时接管控制椅的 UI/网络接口，为此加了 4 个由
+// ParachuteMixinPlugin 门控的 mixin。它们需要对着 Synaxis / ldlib2 的接口编译，
+// 但这两个 mod 的 jar 不能进仓库（libs/ 被 .gitignore 忽略，CI 上也没有）。
+//
+// 所以这里提供「最小签名」的桩：只参与编译，**不会**进 mod jar，也**不会**出现在运行时
+// classpath 上。运行时真实类不在场时，对应 mixin 由门控判定为不应用，本模组行为不变。
+// ---------------------------------------------------------------------------
+sourceSets {
+    stubs {
+        java.srcDir 'src/stubs/java'
+    }
+}
+
 repositories {
     // Add here additional repositories if required by some of the dependencies below.
     maven {
@@ -202,6 +218,21 @@ dependencies {
     // For more info:
     // http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
     // http://www.gradle.org/docs/current/userguide/dependency_management.html
+
+    // Synaxis / ldlib2：**仅编译期**依赖，用来让「坐垫模式伞包」实现它们的 UI / 网络接口
+    // （方块实现 ldlib 的 BlockUIMenuType.BlockUI、方块实体实现 Synaxis 的 NetworkBlockEntityAccess）。
+    // 对应的两个 mixin 由 ParachuteMixinPlugin 按「目标 mod 是否存在」门控，所以运行时依旧零依赖：
+    // 没装 Synaxis 时补丁不应用，本模组行为与从前完全一致。
+    //
+    // 本地开发优先用真 jar（签名更可信）；CI / 没有 libs 的环境自动落到 src/stubs/java 的桩上。
+    compileOnly files("libs/synaxis-1.5.0.jar")
+    compileOnly files("libs/ldlib2-neoforge-1.21.1-2.2.24-all.jar")
+    compileOnly sourceSets.stubs.output
+}
+
+dependencies {
+    // 桩源集也要看得到 Minecraft 类型（它引用了 BlockPos / Level / Player 等）
+    stubsCompileOnly "net.neoforged:neoforge:${neo_version}"
 }
 
 // This block of code expands all declared replace properties in the specified resource targets.

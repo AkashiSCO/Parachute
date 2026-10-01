@@ -17,6 +17,10 @@ public final class ModCreativeTabs {
                     .icon(() -> ModBlocks.PARACHUTE_BLOCK_ITEM.get().getDefaultInstance())
                     .displayItems((parameters, output) -> {
                         output.accept(ModBlocks.PARACHUTE_BLOCK_ITEM.get());
+                        output.accept(ModBlocks.AIR_BLOCK_ITEM.get());
+                        // 原版烈焰棒：坐垫模式伞包在装了 Synaxis 时，手持它右键才能打开控制椅配置界面，
+                        // 放在本模组的创造栏里方便直接用
+                        output.accept(net.minecraft.world.item.Items.BLAZE_ROD);
                     })
                     .build());
 

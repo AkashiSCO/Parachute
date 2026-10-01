@@ -1,6 +1,8 @@
 {
   "block.create_parachute.parachute_block": "伞包",
   "item.create_parachute.parachute_block": "伞包",
+  "block.create_parachute.air_block": "空气方块",
+  "item.create_parachute.air_block": "空气方块",
   "screen.create_parachute.parachute": "减速伞控制器",
   "screen.create_parachute.drag": "阻力系数",
   "screen.create_parachute.rot_drag": "旋转阻尼",

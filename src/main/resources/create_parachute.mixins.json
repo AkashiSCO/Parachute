@@ -1,0 +1,16 @@
+{
+  "required": false,
+  "minVersion": "0.8.5",
+  "package": "com.create.parachute.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "com.create.parachute.mixin.ParachuteMixinPlugin",
+  "mixins": [
+    "ControlChairPilotMixin",
+    "ControlChairClientSeatMixin",
+    "ParachuteBlockEntityNetworkMixin",
+    "ParachuteBlockChairUiMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}

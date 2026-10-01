@@ -1,6 +1,7 @@
 package com.create.parachute.parachute;
 
 import com.create.parachute.client.ClientHooks;
+import com.create.parachute.compat.synaxis.SynaxisCompat;
 import com.create.parachute.registry.ModBlockEntities;
 import com.mojang.serialization.MapCodec;
 import net.minecraft.core.BlockPos;
@@ -144,6 +145,30 @@ public class ParachuteBlock extends BaseEntityBlock {
     @Override
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
                                                Player player, InteractionHand hand, BlockHitResult hitResult) {
+        // 烈焰棒右键（坐垫模式 + 装了 Synaxis）= 打开 Synaxis 控制椅的配置界面。
+        // 潜行时让位给「伞包控制器界面」，所以这里要求非潜行。
+        // 必须返回 SUCCESS 而不是 PASS，否则原版会继续调 useWithoutItem 把玩家按到座位上。
+        if (SynaxisCompat.isLoaded()
+                && state.getValue(SEAT)
+                && hand == InteractionHand.MAIN_HAND
+                && stack.is(Items.BLAZE_ROD)) {
+            com.create.parachute.ParachuteMod.LOGGER.info(
+                    "[create_parachute] 烈焰棒右键坐垫伞包：side={} shift={}", level.isClientSide ? "client" : "server",
+                    player.isShiftKeyDown());
+            if (level.isClientSide) {
+                // 潜行 + 烈焰棒：控制椅的「绑定」界面（纯客户端 Screen）
+                if (player.isShiftKeyDown()) {
+                    ClientHooks.openSynaxisChairBindings();
+                }
+            } else if (!player.isShiftKeyDown()
+                    && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer
+                    && level.getBlockEntity(pos) instanceof ParachuteBlockEntity pbe) {
+                // 非潜行 + 烈焰棒：控制椅的设置面板（ldlib UI，服务端开）
+                pbe.openSynaxisChairSettings(serverPlayer);
+            }
+            return ItemInteractionResult.SUCCESS;
+        }
+
         // 机械动力扳手 / 原版调试棒右键：普通伞包 ⇄ 坐垫伞包。
         // 只改 blockstate（方块类型没变），所以方块实体连同里面的设置一起保留。
         if (isWrench(stack) || stack.is(Items.DEBUG_STICK)) {

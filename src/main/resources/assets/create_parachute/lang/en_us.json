@@ -1,6 +1,8 @@
 {
   "block.create_parachute.parachute_block": "Parachute Pack",
   "item.create_parachute.parachute_block": "Parachute Pack",
+  "block.create_parachute.air_block": "Air Block",
+  "item.create_parachute.air_block": "Air Block",
   "screen.create_parachute.parachute": "Parachute Controller",
   "screen.create_parachute.drag": "Drag",
   "screen.create_parachute.rot_drag": "RotDrag",

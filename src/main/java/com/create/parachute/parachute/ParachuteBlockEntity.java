@@ -2,6 +2,8 @@ package com.create.parachute.parachute;
 
 import com.create.parachute.ParachuteConfig;
 import com.create.parachute.client.ClientHooks;
+import com.create.parachute.compat.synaxis.SynaxisChairSupport;
+import com.create.parachute.compat.synaxis.SynaxisCompat;
 import com.create.parachute.data.ParachuteManager;
 import com.create.parachute.network.ClientboundParachuteVelocityPayload;
 import com.create.parachute.registry.ModBlockEntities;
@@ -196,6 +198,16 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     /** 整体偏移（格）：模型整体平移（含放置自带偏移） */
     private volatile float offX, offY, offZ;
 
+    /**
+     * Synaxis 控制椅桥（幽灵椅子），只在「坐垫模式 + 装了 Synaxis」时非空。
+     * 见 {@link com.create.parachute.compat.synaxis.SynaxisChairBridge}。
+     */
+    @Nullable
+    private SynaxisChairSupport synaxisChair;
+    /** 读盘时先把椅子标签存这儿，等第一次 tick（level 已就绪）再灌进幽灵椅子 */
+    @Nullable
+    private CompoundTag pendingSynaxisChairTag;
+
     public ParachuteBlockEntity(BlockPos pos, BlockState blockState) {
         super(ModBlockEntities.PARACHUTE_BLOCK_ENTITY.get(), pos, blockState);
         this.dyeColorARGB = 0xFF000000 | net.minecraft.world.item.DyeColor.RED.getTextureDiffuseColor();
@@ -212,6 +224,7 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     public static void serverTick(Level level, BlockPos pos, BlockState state, ParachuteBlockEntity blockEntity) {
         blockEntity.tickAnimation();
         blockEntity.tickServer();
+        blockEntity.tickSynaxisChair(false);
     }
 
     /**
@@ -221,6 +234,88 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     public static void clientTick(Level level, BlockPos pos, BlockState state, ParachuteBlockEntity blockEntity) {
         blockEntity.tickAnimation();
         blockEntity.tickClientDirection();
+        blockEntity.tickSynaxisChair(true);
+    }
+
+    // ============================================================
+    // Synaxis 控制椅（坐垫模式的可选兼容）
+    // ============================================================
+
+    /**
+     * 维护「幽灵控制椅」：坐垫模式 + 装了 Synaxis 时，在同一个坐标上养活一个真正的
+     * Synaxis 椅子 BE，并每 tick 驱动它；切回普通伞包模式（或 Synaxis 不在）时拆掉。
+     *
+     * <p>用 blockstate 的 {@code seat} 属性做唯一判据，所以用扳手切形态、破坏方块、
+     * 区块卸载都会自然走上「拆掉」这条分支。</p>
+     */
+    private void tickSynaxisChair(boolean clientSide) {
+        boolean wantChair = this.level != null
+                && SynaxisCompat.isLoaded()
+                && this.getBlockState().hasProperty(ParachuteBlock.SEAT)
+                && this.getBlockState().getValue(ParachuteBlock.SEAT);
+        if (!wantChair) {
+            if (this.synaxisChair != null) {
+                this.synaxisChair.release();
+                this.synaxisChair = null;
+            }
+            return;
+        }
+        if (this.synaxisChair == null) {
+            this.synaxisChair = SynaxisCompat.createChair(this.level, this.worldPosition, this.getBlockState());
+            if (this.synaxisChair == null) {
+                return;
+            }
+            if (this.pendingSynaxisChairTag != null && this.level.registryAccess() != null) {
+                this.synaxisChair.load(this.pendingSynaxisChairTag, this.level.registryAccess());
+                this.pendingSynaxisChairTag = null;
+            }
+        }
+        this.synaxisChair.tick(clientSide);
+    }
+
+    /**
+     * 打开 Synaxis 控制椅的配置界面（烈焰棒右键）。
+     *
+     * @return 真的打开了才返回 true；没装 Synaxis / 不是坐垫模式 / 桥没建起来都返回 false
+     */
+    public boolean openSynaxisChairSettings(net.minecraft.server.level.ServerPlayer player) {
+        if (this.synaxisChair == null) {
+            com.create.parachute.ParachuteMod.LOGGER.info(
+                    "[create_parachute] 坐垫模式的伞包还没有 Synaxis 控制椅（桥未建立），无法打开控制椅界面");
+            return false;
+        }
+        return this.synaxisChair.openSettings(player);
+    }
+
+    /** 坐垫模式的伞包当前是否带着 Synaxis 控制椅（给交互与调试用）。 */
+    public boolean hasSynaxisChair() {
+        return this.synaxisChair != null;
+    }
+
+    /**
+     * 幽灵椅子的「网络/UI 后端」（Synaxis 的 {@code NetworkBlockEntitySupport}）。
+     *
+     * <p>返回类型是 {@code Object}，免得公共类里出现 Synaxis 类型；真正把它交出去的
+     * 是门控 mixin {@code ParachuteBlockEntityNetworkMixin}（只在装了 Synaxis 时应用）。</p>
+     */
+    @Nullable
+    public Object parachuteNetworkSupport() {
+        return this.synaxisChair == null ? null : this.synaxisChair.networkSupport();
+    }
+
+    /** Synaxis 的 {@code NetworkBlockEntityAccess#canPlayerUse}：离太远就别让他操作界面。 */
+    public boolean canPlayerUse(net.minecraft.world.entity.player.Player player) {
+        return player.distanceToSqr(this.worldPosition.getX() + 0.5D, this.worldPosition.getY() + 0.5D,
+                this.worldPosition.getZ() + 0.5D) <= 64.0D;
+    }
+
+    @Override
+    public void setRemoved() {
+        if (this.synaxisChair != null) {
+            this.synaxisChair.release();
+            this.synaxisChair = null;
+        }
+        super.setRemoved();
     }
 
     /**
@@ -717,6 +812,12 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         tag.putFloat("OffY", this.offY);
         tag.putFloat("OffZ", this.offZ);
         tag.putFloat("Scale", this.renderScale);
+        // 幽灵控制椅的配置（倾角模式/第三人称缩放/设备名等）跟着伞包一起存
+        if (this.synaxisChair != null) {
+            CompoundTag chairTag = new CompoundTag();
+            this.synaxisChair.save(chairTag, registries);
+            tag.put("SynaxisChair", chairTag);
+        }
     }
 
     /**
@@ -733,6 +834,10 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         this.disconnectOnLowSpeed = tag.getBoolean("DisconnectOnLowSpeed");
         this.disconnectOnRedstonePulse = readRedstoneFlag(tag);
         readCommonTag(tag);
+        if (tag.contains("SynaxisChair")) {
+            // level 可能还没就绪，先存下来，等第一次 tick 再灌给幽灵控制椅
+            this.pendingSynaxisChairTag = tag.getCompound("SynaxisChair");
+        }
     }
 
     /**
@@ -790,6 +895,12 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         tag.putFloat("OffY", this.offY);
         tag.putFloat("OffZ", this.offZ);
         tag.putFloat("Scale", this.renderScale);
+        // 幽灵控制椅的配置也同步给客户端，免得刚进 chunk 时客户端椅子是默认设置
+        if (this.synaxisChair != null) {
+            CompoundTag chairTag = new CompoundTag();
+            this.synaxisChair.save(chairTag, registries);
+            tag.put("SynaxisChair", chairTag);
+        }
         return tag;
     }
 
