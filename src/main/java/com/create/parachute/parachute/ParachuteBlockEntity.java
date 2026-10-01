@@ -293,13 +293,39 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     }
 
     /**
+     * 确保幽灵控制椅已经建立，返回是否可用。
+     *
+     * <p>给"界面宿主"用：客户端那侧的幽灵椅子是懒建立的（在 BE 第一次 tick 里建），
+     * 而界面有可能比它更早被要求创建 —— 那时 {@link #hasSynaxisChair()} 还是 false，
+     * 拿不到椅子的 UI/命令绑定，表现就是"面板能开、改参数不生效"。
+     * 这里复用 tick 里那套对账逻辑，就地把它建起来。</p>
+     */
+    public boolean ensureSynaxisChair() {
+        if (this.level == null || !SynaxisCompat.isLoaded()) {
+            return false;
+        }
+        if (this.synaxisChair == null) {
+            tickSynaxisChair(this.level.isClientSide);
+        }
+        return this.synaxisChair != null;
+    }
+
+    /**
      * 幽灵椅子的「网络/UI 后端」（Synaxis 的 {@code NetworkBlockEntitySupport}）。
      *
      * <p>返回类型是 {@code Object}，免得公共类里出现 Synaxis 类型；真正把它交出去的
      * 是门控 mixin {@code ParachuteBlockEntityNetworkMixin}（只在装了 Synaxis 时应用）。</p>
+     *
+     * <p>Synaxis 的同步/命令包都是「按坐标找 BE，再向它要网络后端」：客户端那侧的幽灵椅子
+     * 是懒建立的，如果这一刻还没建好就会拿到 {@code null}，Synaxis 反手一个 NPE
+     * （{@code applyFields -> access.state()}），客户端状态就永远停在默认值。
+     * 所以这里顺手把它建起来，保证"只要装了 Synaxis、坐标对得上"就不会给 null。</p>
      */
     @Nullable
     public Object parachuteNetworkSupport() {
+        if (this.synaxisChair == null) {
+            ensureSynaxisChair();
+        }
         return this.synaxisChair == null ? null : this.synaxisChair.networkSupport();
     }
 

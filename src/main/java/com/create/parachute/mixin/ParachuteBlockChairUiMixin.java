@@ -4,6 +4,7 @@ import com.create.parachute.parachute.ParachuteBlock;
 import com.create.parachute.parachute.ParachuteBlockEntity;
 import com.lowdragmc.lowdraglib2.gui.factory.BlockUIMenuType;
 import com.lowdragmc.lowdraglib2.gui.ui.ModularUI;
+import com.lowdragmc.lowdraglib2.gui.ui.UI;
 import com.verr1.synaxis.foundation.blockentity.NetworkBlockEntityAccess;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import org.spongepowered.asm.mixin.Mixin;
@@ -37,10 +38,22 @@ public abstract class ParachuteBlockChairUiMixin implements BlockUIMenuType.Bloc
     @Override
     public ModularUI createUI(BlockUIMenuType.BlockUIHolder holder) {
         BlockEntity blockEntity = holder.player.level().getBlockEntity(holder.pos);
-        if (blockEntity instanceof ParachuteBlockEntity parachute && parachute.hasSynaxisChair()
+        // ensureSynaxisChair()：客户端那侧的椅子是懒建立的，界面可能比它先到，
+        // 不先建立就会拿到"没有椅子"的 BE（界面能用但改参数不生效）。
+        if (blockEntity instanceof ParachuteBlockEntity parachute && parachute.ensureSynaxisChair()
                 && blockEntity instanceof NetworkBlockEntityAccess access) {
-            return access.createModularUI(holder.player);
+            // 用 BlockUIHolder 重载（Synaxis 自己的方块就是用这个）：它会登记 UI 观察者与
+            // UI 会话（beginOpening），字段值的下发/会话快照都靠它。注意命令那条校验
+            // （handleCommand 里的 isOpenUiContainer）对幽灵椅子不成立，所以命令是由
+            // ParachuteBlockEntityNetworkMixin 自己转发、自己校验玩家的。
+            ModularUI ui = access.createModularUI(holder);
+            if (ui != null) {
+                return ui;
+            }
         }
-        return null;
+        // 关键：绝不能返回 null。ldlib 拿到 null 会在 setMenu 时 NPE 并把客户端踢出游戏
+        // （客户端那侧的幽灵椅子是懒建立的，界面比它先打开就会走到这里）。
+        // Synaxis 自己的参照实现也是返回空 UI，这里照抄。
+        return ModularUI.of(UI.empty(), holder.player);
     }
 }

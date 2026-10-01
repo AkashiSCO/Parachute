@@ -1,5 +1,7 @@
 package com.verr1.synaxis.foundation.blockentity;
 
+import com.verr1.synaxis.foundation.command.CommandRegistry;
+
 /**
  * 编译期桩 —— 只为让门控 mixin 能编译。
  *
@@ -9,4 +11,14 @@ package com.verr1.synaxis.foundation.blockentity;
  * 对应 mixin 由 {@code ParachuteMixinPlugin} 判定为不应用。</p>
  */
 public class NetworkBlockEntitySupport {
+    /**
+     * 命令表（幽灵椅子的 {@code SET_*} 命令都注册在这里）。
+     *
+     * <p>伞包 BE 自己转发命令时要用它：Synaxis 的 {@code handleCommand} 里那道
+     * {@code canPlayerUse} 校验对不在 level BE 表里的幽灵椅子不成立，所以改成
+     * 由伞包校验玩家、再把命令交给这张表执行。</p>
+     */
+    public CommandRegistry commands() {
+        return null;
+    }
 }
