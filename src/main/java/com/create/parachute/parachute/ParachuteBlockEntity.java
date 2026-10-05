@@ -265,10 +265,14 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
             if (this.synaxisChair == null) {
                 return;
             }
-            if (this.pendingSynaxisChairTag != null && this.level.registryAccess() != null) {
-                this.synaxisChair.load(this.pendingSynaxisChairTag, this.level.registryAccess());
-                this.pendingSynaxisChairTag = null;
-            }
+        }
+        // 椅子存盘的 NBT 可能是"椅子还没建好"时进来的（客户端区块数据包/读盘都可能比第一次 tick 晚，
+        // 也可能有别的调用先一步把椅子 lazy 建出来），所以统一在这里灌一次，
+        // 而不是只在"刚创建"那一瞬间灌 —— 否则那标签会一直挂着不生效：
+        // 表现就是"重进存档后，椅子的设置要先开一次界面（界面会把状态重新推一遍）才生效"。
+        if (this.pendingSynaxisChairTag != null && this.level.registryAccess() != null) {
+            this.synaxisChair.load(this.pendingSynaxisChairTag, this.level.registryAccess());
+            this.pendingSynaxisChairTag = null;
         }
         this.synaxisChair.tick(clientSide);
     }

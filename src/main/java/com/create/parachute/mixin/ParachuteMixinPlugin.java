@@ -44,6 +44,12 @@ public final class ParachuteMixinPlugin implements IMixinConfigPlugin {
             // 只有目标 mod 在场时才允许应用（否则类加载会失败）
             apply = isModLoaded(SYNAXIS_MOD_ID) || targetClassPresent(
                     "com/verr1/synaxis/foundation/blockentity/NetworkBlockEntityAccess.class");
+        } else if (mixinClassName.endsWith(".SmartBlockEntityPermissionMixin")) {
+            // 幽灵控制椅的权限判定兜底：目标是 Create 的 SmartBlockEntity，
+            // 但只有"装了 Synaxis（才会有幽灵椅子）"时才有意义
+            apply = targetClassPresent("com/simibubi/create/foundation/blockEntity/SmartBlockEntity.class")
+                    && (isModLoaded(SYNAXIS_MOD_ID) || targetClassPresent(
+                    "com/verr1/synaxis/foundation/blockentity/NetworkBlockEntityAccess.class"));
         }
         ParachuteMod.LOGGER.info("[create_parachute] mixin 门控: {} -> {}", mixinClassName, apply);
         return apply;
