@@ -192,6 +192,13 @@ public class ParachuteSeatEntity extends Entity {
         // 人就高出枢轴点约 0.6 格。不同生物这个值不同，用 API 取，别写死。
         Vec3 attachment = passenger.getVehicleAttachmentPoint(this);
         moveFunction.accept(passenger, point.x - attachment.x, point.y - attachment.y, point.z - attachment.z);
+        // 兜底：坐垫上的乘客不许"走"。乘客自身移动已经在 PlayerSeatMovementMixin 里掐掉了，
+        // 但别的模组（手柄/线传之类）如果绕过 travel 直接推玩家，走路距离 walkDist 还是会长，
+        // 而原版「视角摆动」就是被它驱动的 —— 表现成画面上下抖。这里把差值抹平，
+        // 让摆动量自然衰减到 0（位置仍然由上面那行钉住，不受影响）。
+        if (passenger instanceof net.minecraft.world.entity.LivingEntity living && living.getVehicle() == this) {
+            living.walkDistO = living.walkDist;
+        }
     }
 
     /**

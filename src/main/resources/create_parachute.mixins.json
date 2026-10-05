@@ -9,7 +9,8 @@
     "ControlChairClientSeatMixin",
     "ParachuteBlockEntityNetworkMixin",
     "ParachuteBlockChairUiMixin",
-    "SmartBlockEntityPermissionMixin"
+    "SmartBlockEntityPermissionMixin",
+    "PlayerSeatMovementMixin"
   ],
   "injectors": {
     "defaultRequire": 0
