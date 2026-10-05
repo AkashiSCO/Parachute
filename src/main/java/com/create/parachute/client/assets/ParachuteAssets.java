@@ -552,21 +552,12 @@ public final class ParachuteAssets {
                     GsonHelper.getAsString(GsonHelper.getAsJsonObject(root, "meta", new JsonObject()),
                             "model_format", "modded_entity"));
 
-            // 静态姿态烘焙：bbmodel 以前从不烘，每帧都要把整把伞的顶点重新写进缓冲区 —— 放几把就几十 MB/帧。
-            // 这里按"开伞动画完全展开"的姿态烘一份；烘完 resetPose 复原，正在开伞的几帧仍走逐帧发射。
-            ObjGpuCache gpu = null;
-            if (modelPart != null
-                    && !Boolean.getBoolean("parachute.debug.nogpu")
-                    && estimateTriangles(root) >= BAKE_MIN_TRIANGLES) {
-                if (anim != null) {
-                    applyOpenAnimation(modelPart, anim, 1.0F, new Vector3f());
-                }
-                gpu = new ObjGpuCache(modelPart);
-                // 烘完恢复定义姿态：逐帧发射那条路径每帧都会自己 resetPose + 应用动画
-                modelPart.getAllParts().forEach(ModelPart::resetPose);
-            }
-
-            return new BakedParachute(id, List.of(new Layer(modelPart, gpu, texture, whiteTexture, false, 1.0F)),
+            // 【已回退】bbmodel（含基岩版）**不做** GPU 静态烘焙：
+            // 曾经按"开伞动画完全展开"的姿态烘一份 ObjGpuCache 省顶点写入，但基岩版 bbmodel
+            // 的逐面 UV / 组坐标语义和 ModelPart 的静态烘焙对不上（烘出来是坏的），
+            // 所以这里保持老行为：bbmodel 一律走 ModelPart 逐帧发射那条路径。
+            // GPU 烘焙只留给 OBJ 工作流（见 loadObjParachute）。
+            return new BakedParachute(id, List.of(new Layer(modelPart, null, texture, whiteTexture, false, 1.0F)),
                     anim, lengthSeconds, bedrock, modelRadius(root), BbModelParser.hasFlatElement(root));
         } catch (Exception e) {
             ParachuteMod.LOGGER.warn("Failed to load parachute '{}/{}': {}", source, id, e.toString());
@@ -604,7 +595,11 @@ public final class ParachuteAssets {
     /**
      * bbmodel 三角形数估算：每个导出元素最多 6 个 quad = 12 个三角形（零厚度块的侧面是退化的，
      * 所以这是上限）。只用来决定"要不要烘"，宁可高估。
+     *
+     * <p>目前<b>没有调用方</b>：bbmodel 的 GPU 烘焙已回退（见 {@code loadOne}），
+     * 保留它是为了以后要重做烘焙时能直接用。</p>
      */
+    @SuppressWarnings("unused")
     private static int estimateTriangles(JsonObject root) {
         int count = 0;
         for (JsonElement e : GsonHelper.getAsJsonArray(root, "elements", new JsonArray())) {
