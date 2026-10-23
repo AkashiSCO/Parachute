@@ -211,6 +211,14 @@ public final class ParachuteAssets {
     /** OBJ 工作流的贴图子目录：{@code <伞名>/textures/*.png} */
     private static final String TEXTURE_DIR = "textures";
 
+    /**
+     * 找贴图时依次尝试的子目录（相对伞文件夹）。除了本模组文档里写的 {@code textures/}，
+     * 还要兼容 Blender / DCS 导出时常见的 {@code assets/...} 布局 —— 那些模型里
+     * {@code .mtl} 的 {@code map_Kd} 往往写成 {@code assets/textures/xxx.png}，
+     * 而解析时只保留了文件名，所以这里按目录逐个找。
+     */
+    private static final String[] TEXTURE_SUBDIRS = {TEXTURE_DIR, "assets/textures", "assets"};
+
     /** OBJ 单位 → 方块。Blender 默认 1 unit = 1 m = 1 格，所以是 1.0；要改大小用 GUI 的 Scale */
     private static final float OBJ_UNIT_SCALE = 1.0F;
 
@@ -662,10 +670,7 @@ public final class ParachuteAssets {
                 break;
             }
         }
-        Path fallbackTexture = anyMapped ? null : firstPng(dir.resolve(TEXTURE_DIR));
-        if (fallbackTexture == null && !anyMapped) {
-            fallbackTexture = firstPng(dir);
-        }
+        Path fallbackTexture = anyMapped ? null : firstPngAnywhere(dir);
 
         // 每个 (材质,对象) 组 → 它该用哪张图（或纯色）+ 透明度；按 (albedo, 遮罩, d) 合并成层
         Map<String, LayerSpec> byKey = new LinkedHashMap<>();
@@ -858,14 +863,60 @@ public final class ParachuteAssets {
         }
     }
 
-    /** 材质名对应的图片文件：{@code textures/<文件名>} 优先，其次伞文件夹根目录 */
+    /**
+     * 材质名对应的图片文件。按常见导出布局依次找：
+     * {@code textures/} → {@code assets/textures/} → {@code assets/} → 伞文件夹根目录，
+     * 都没有就整个文件夹递归按文件名找（Blender/DCS 的 {@code assets/} 多层布局）。
+     */
     @Nullable
     private static Path resolveImage(Path dir, @Nullable String fileName) {
         if (fileName == null || fileName.isEmpty()) return null;
-        Path inTextureDir = dir.resolve(TEXTURE_DIR).resolve(fileName);
-        if (Files.isRegularFile(inTextureDir)) return inTextureDir;
+        for (String sub : TEXTURE_SUBDIRS) {
+            Path candidate = dir.resolve(sub).resolve(fileName);
+            if (Files.isRegularFile(candidate)) return candidate;
+        }
         Path plain = dir.resolve(fileName);
-        return Files.isRegularFile(plain) ? plain : null;
+        if (Files.isRegularFile(plain)) return plain;
+        return findFileByName(dir, fileName);
+    }
+
+    /** 在 {@code dir} 下（最多 4 层）递归找同名文件；匹配不区分大小写，返回路径排序后的第一个保证稳定 */
+    @Nullable
+    private static Path findFileByName(Path dir, String fileName) {
+        if (!Files.isDirectory(dir)) return null;
+        try (java.util.stream.Stream<Path> s = Files.walk(dir, 4)) {
+            return s.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().equalsIgnoreCase(fileName))
+                    .sorted()
+                    .findFirst()
+                    .orElse(null);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 在常见贴图目录里找文件名最小的 png：先按 {@link #TEXTURE_SUBDIRS} 顺序各找一层，
+     * 再伞文件夹根目录，最后整个文件夹递归（兼容 {@code assets/...} 多层导出布局）。
+     */
+    @Nullable
+    private static Path firstPngAnywhere(Path dir) {
+        if (!Files.isDirectory(dir)) return null;
+        for (String sub : TEXTURE_SUBDIRS) {
+            Path best = firstPng(dir.resolve(sub));
+            if (best != null) return best;
+        }
+        Path best = firstPng(dir);
+        if (best != null) return best;
+        try (java.util.stream.Stream<Path> s = Files.walk(dir, 4)) {
+            return s.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".png"))
+                    .sorted()
+                    .findFirst()
+                    .orElse(null);
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     /** 目录里文件名最小的 png（保证结果稳定，不受文件系统顺序影响） */
