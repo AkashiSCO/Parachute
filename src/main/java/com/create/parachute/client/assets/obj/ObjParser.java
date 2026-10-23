@@ -4,6 +4,7 @@ import com.create.parachute.ParachuteConfig;
 import com.create.parachute.ParachuteMod;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 /**
  * Wavefront OBJ 解析器（Blender 工作流），不依赖任何外部库。
@@ -240,17 +242,14 @@ public final class ObjParser {
 
         ObjData d = new ObjData();
         d.maxTriangles = maxTriangles();
-        String object = "";
-        String group = "";
-        int objectIdx = 0;
-        int groupIdx = 0;
-        int materialIdx = 0;
-        boolean smooth = false;
+        // 单遍流式解析：允许的上限现在到了 GB 级，先把整个文件读成 List<String> 会直接吃爆堆，
+        // 所以这里逐行喂进去，只有顶点/面/index 这些真正的几何数据留在内存里。
+        Cursor cur = new Cursor();
         Set<String> libs = new LinkedHashSet<>();
 
-        for (String raw : readLines(objFile)) {
+        forEachLine(objFile, raw -> {
             String line = stripComment(raw).trim();
-            if (line.isEmpty()) continue;
+            if (line.isEmpty()) return;
             int sp = firstWhitespace(line);
             String kw = (sp < 0 ? line : line.substring(0, sp)).toLowerCase(Locale.ROOT);
             String rest = sp < 0 ? "" : line.substring(sp + 1).trim();
@@ -268,21 +267,19 @@ public final class ObjParser {
                     float[] n = parseFloats(rest, 3);
                     if (n != null) d.normals.add(normalize(n));
                 }
-                case "f" -> parseFace(d, rest, objectIdx, groupIdx, materialIdx, smooth);
+                case "f" -> parseFace(d, rest, cur.objectIdx, cur.groupIdx, cur.materialIdx, cur.smooth);
                 case "o" -> {
-                    object = rest.isEmpty() ? "object" : rest;
-                    objectIdx = d.internObject(object);
+                    cur.objectIdx = d.internObject(rest.isEmpty() ? "object" : rest);
                     // Blender: o/g 切换会把平滑状态重置为平面
-                    smooth = false;
+                    cur.smooth = false;
                     d.sawObjectLine = true;
                 }
                 case "g" -> {
-                    group = rest;
-                    groupIdx = d.internGroup(group);
-                    smooth = false;
+                    cur.groupIdx = d.internGroup(rest);
+                    cur.smooth = false;
                 }
-                case "usemtl" -> materialIdx = d.internMaterial(rest);
-                case "s" -> smooth = !(rest.isEmpty() || rest.equalsIgnoreCase("off") || rest.equals("0"));
+                case "usemtl" -> cur.materialIdx = d.internMaterial(rest);
+                case "s" -> cur.smooth = !(rest.isEmpty() || rest.equalsIgnoreCase("off") || rest.equals("0"));
                 case "mtllib" -> {
                     for (String lib : splitTokens(rest)) {
                         String clean = unquote(lib);
@@ -293,7 +290,7 @@ public final class ObjParser {
                     // l / p / curv / cstype / deg / parm / 其它扩展：忽略
                 }
             }
-        }
+        });
 
         // 材质库：mtllib 指定的 + 同目录同名 .mtl（Blender #97757：没引用也会加）
         Path dir = objFile.getParent();
@@ -443,29 +440,29 @@ public final class ObjParser {
     /** 读一个 .mtl：收集 {@code map_Kd}（albedo）、{@code map_d}（透明度遮罩）、{@code d}（整体不透明度） */
     private static void readMtl(Path mtl, Map<String, Material> out) {
         if (!Files.isRegularFile(mtl)) return;
-        String current = "";
-        for (String raw : readLines(mtl)) {
+        String[] current = {""};
+        forEachLine(mtl, raw -> {
             String line = stripComment(raw).trim();
-            if (line.isEmpty()) continue;
+            if (line.isEmpty()) return;
             int sp = firstWhitespace(line);
             String kw = (sp < 0 ? line : line.substring(0, sp)).toLowerCase(Locale.ROOT);
             String rest = sp < 0 ? "" : line.substring(sp + 1).trim();
             if (kw.equals("newmtl")) {
-                current = rest;
-                continue;
+                current[0] = rest;
+                return;
             }
-            if (current.isEmpty()) continue;
+            if (current[0].isEmpty()) return;
             switch (kw) {
                 case "map_kd" -> {
                     String name = lastTokenFileName(rest);
                     if (name != null) {
-                        out.put(current, out.getOrDefault(current, Material.DEFAULT).withDiffuse(name));
+                        out.put(current[0], out.getOrDefault(current[0], Material.DEFAULT).withDiffuse(name));
                     }
                 }
                 case "map_d" -> {
                     String name = lastTokenFileName(rest);
                     if (name != null) {
-                        out.put(current, out.getOrDefault(current, Material.DEFAULT).withAlphaMask(name));
+                        out.put(current[0], out.getOrDefault(current[0], Material.DEFAULT).withAlphaMask(name));
                     }
                 }
                 case "kd" -> {
@@ -476,7 +473,7 @@ public final class ObjParser {
                             float r = Float.parseFloat(toks[0]);
                             float g = Float.parseFloat(toks[1]);
                             float b = Float.parseFloat(toks[2]);
-                            out.put(current, out.getOrDefault(current, Material.DEFAULT).withColor(r, g, b));
+                            out.put(current[0], out.getOrDefault(current[0], Material.DEFAULT).withColor(r, g, b));
                         } catch (NumberFormatException ignored) {
                         }
                     }
@@ -488,7 +485,7 @@ public final class ObjParser {
                         try {
                             float v = Float.parseFloat(toks[toks.length - 1]);
                             if (v >= 0.0F && v <= 1.0F) {
-                                out.put(current, out.getOrDefault(current, Material.DEFAULT).withDissolve(v));
+                                out.put(current[0], out.getOrDefault(current[0], Material.DEFAULT).withDissolve(v));
                             }
                         } catch (NumberFormatException ignored) {
                         }
@@ -497,7 +494,7 @@ public final class ObjParser {
                 default -> {
                 }
             }
-        }
+        });
     }
 
     /** 取路径的最后一个 token 并只留文件名（去引号、去目录） */
@@ -515,30 +512,42 @@ public final class ObjParser {
     // 文本工具
     // ============================================================
 
-    /** 读文本行，支持行尾 {@code \} 续行 */
-    private static List<String> readLines(Path file) {
-        List<String> out = new ArrayList<>();
+    /**
+     * 逐行流式读文本，支持行尾 {@code \} 续行。
+     *
+     * <p>以前这里是 {@code Files.readAllLines} 把整个文件读成 {@code List<String>}，
+     * 配置允许的上限到 GB 级以后那一份副本就足以把堆吃爆（2 GB 文本 → 2 GB 字节 + 一堆 String），
+     * 所以改成边读边喂；内存里只留解析出来的几何数据。</p>
+     */
+    private static void forEachLine(Path file, Consumer<String> sink) {
         StringBuilder pending = new StringBuilder();
-        try {
-            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-                String l = line;
+        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            String l;
+            while ((l = reader.readLine()) != null) {
                 if (l.endsWith("\\")) {
                     pending.append(l, 0, l.length() - 1);
                     continue;
                 }
                 if (pending.length() > 0) {
                     pending.append(l);
-                    out.add(pending.toString());
+                    sink.accept(pending.toString());
                     pending.setLength(0);
                 } else {
-                    out.add(l);
+                    sink.accept(l);
                 }
             }
         } catch (IOException e) {
             ParachuteMod.LOGGER.warn("Failed to read '{}': {}", file, e.getMessage());
         }
-        if (pending.length() > 0) out.add(pending.toString());
-        return out;
+        if (pending.length() > 0) sink.accept(pending.toString());
+    }
+
+    /** 解析游标：{@code forEachLine} 的 lambda 里需要可变状态（o/g/usemtl/s 会切换当前归属） */
+    private static final class Cursor {
+        int objectIdx;
+        int groupIdx;
+        int materialIdx;
+        boolean smooth;
     }
 
     private static String stripComment(String line) {
