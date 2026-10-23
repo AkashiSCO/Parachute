@@ -80,6 +80,23 @@ public final class ParachuteConfig {
     public static final ModConfigSpec.DoubleValue OBJ_SMOOTH_ANGLE;
 
     /**
+     * 单个 {@code .obj} 文件的大小上限（MB，{@code 0} = 不限），默认 2048（2 GB）。
+     *
+     * <p>OBJ 是<b>客户端读本地文件</b>加载的，解析时整个文件会被读进内存
+     * （{@code Files.readAllLines}），所以过大文件会直接吃满堆 —— 这道闸就是为它准备的，
+     * 不过默认已经放到 2 GB，等于"基本不拦"，真正的内存上限由 JVM 堆决定。</p>
+     */
+    public static final ModConfigSpec.IntValue OBJ_MAX_FILE_MB;
+
+    /**
+     * 单个 {@code .obj} 最多加载多少个三角形（{@code 0} = 不限），默认 400 万。
+     *
+     * <p>超过上限的部分会被丢弃并打一条警告（模型看起来会缺一块），
+     * 目的是避免超密模型把渲染线程卡死。</p>
+     */
+    public static final ModConfigSpec.IntValue OBJ_MAX_TRIANGLES;
+
+    /**
      * 坐垫伞包的座位点不再用单独的配置项：座位点 = 方块中心 + 方块上设的枢轴偏移
      * （伞包界面「枢轴点」模式，见 {@code ParachuteSeatEntity#seatPoint()}）。
      * <p>旧版本这里有个 {@code visual.seatHeight}（默认 -0.4375）；配置项已移除，
@@ -126,6 +143,15 @@ public final class ParachuteConfig {
 
     /** 单个玩家最多能排多少个待发文件，防止刷指令把队列撑爆 */
     public static final ModConfigSpec.IntValue DOWNLOAD_MAX_PENDING_FILES;
+
+    /**
+     * 服务器往客户端分发伞模型时，单个文件的大小上限（MB，{@code 0} = 不限），默认 64。
+     *
+     * <p>限制是按<b>单个文件</b>算的：{@code .obj}、{@code .mtl}、以及每一张贴图各算一份，
+     * 所以一个模型总分发量可以远超这个值。它的作用只是防止被封包塞满内存/磁盘；
+     * 模型里如果有单张超过 64 MB 的贴图或 .obj，把这里调大即可。</p>
+     */
+    public static final ModConfigSpec.IntValue DOWNLOAD_MAX_FILE_MB;
 
 
     public static final ModConfigSpec SPEC;
@@ -230,6 +256,20 @@ public final class ParachuteConfig {
                          "（一份几何 + 剔除背面）光照必然正确的前提。改这个值后重新加载该伞生效。")
                 .defineInRange("objSmoothAngle", 60.0D, 0.0D, 180.0D);
 
+        OBJ_MAX_FILE_MB = b
+                .comment("单个 .obj 文件的大小上限，单位 MB；超过就整个跳过不加载（0 = 不限，默认 2048 = 2 GB）。",
+                         "OBJ 是客户端读本地文件解析的，解析时整个文件进内存，所以超大文件会直接吃满堆。",
+                         "默认 2 GB 基本不会拦到正常模型；内存不够时把这里调小，或给客户端多分点堆内存。",
+                         "改这个值后重新加载该伞生效（在伞包界面里重新选一次模型即可）。")
+                .defineInRange("objMaxFileMB", 2048, 0, 65536);
+
+        OBJ_MAX_TRIANGLES = b
+                .comment("单个 .obj 最多加载的三角形数（0 = 不限，默认 400 万）。",
+                         "超过上限的多余面会被丢弃并打一条警告（模型会缺一块），用来防止超密模型卡死渲染线程。",
+                         "参考：AH-64D 模型约 98 万个面，离上限还很远。",
+                         "改这个值后重新加载该伞生效。")
+                .defineInRange("objMaxTriangles", 4_000_000, 0, 200_000_000);
+
         b.pop();
 
         b.push("physics");
@@ -284,6 +324,12 @@ public final class ParachuteConfig {
         DOWNLOAD_MAX_PENDING_FILES = b
                 .comment("单个玩家最多排队多少个待发文件，超了就拒绝并要求改用单把下载，防止刷指令撑爆队列")
                 .defineInRange("maxPendingFiles", 512, 1, 8192);
+
+        DOWNLOAD_MAX_FILE_MB = b
+                .comment("分发伞模型时单个文件的大小上限，单位 MB，0 = 不限（默认 64）。",
+                         "按单个文件算：.obj / .mtl / 每张贴图各算一份，所以一个模型总分发量可以远超这个值。",
+                         "它只用来防止被封包塞满内存，模型里有单张超过 64 MB 的贴图时把它调大即可。")
+                .defineInRange("maxFileMB", 64, 0, 65536);
 
         b.pop();
 

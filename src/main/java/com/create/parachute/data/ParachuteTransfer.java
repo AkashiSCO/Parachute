@@ -1,5 +1,6 @@
 package com.create.parachute.data;
 
+import com.create.parachute.ParachuteConfig;
 import com.create.parachute.ParachuteMod;
 import com.create.parachute.network.ParachuteFileChunkPayload;
 import net.minecraft.network.chat.Component;
@@ -50,8 +51,18 @@ public final class ParachuteTransfer {
 
     /** 单个数据包的负载大小：远小于 1 MiB 上限，1.4 MB 的 bbmodel 约 22 个包 */
     public static final int CHUNK_SIZE = 64 * 1024;
-    /** 单文件大小上限，防止被封包塞满磁盘 */
-    public static final int MAX_FILE_BYTES = 64 * 1024 * 1024;
+
+    /**
+     * 单文件大小上限（字节），读配置 {@code download.maxFileMB}；{@code 0} = 不限（默认 64 MB）。
+     *
+     * <p>按单个文件算：{@code .obj} / {@code .mtl} / 每张贴图各算一份，用来防止被封包塞满内存/磁盘。</p>
+     */
+    public static int maxFileBytes() {
+        int mb = ParachuteConfig.DOWNLOAD_MAX_FILE_MB.get();
+        if (mb <= 0) return Integer.MAX_VALUE;
+        long bytes = (long) mb * 1024L * 1024L;
+        return bytes > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) bytes;
+    }
 
     private static final int MAX_FOLDER_NAME_LENGTH = 64;
     private static final int MAX_FILE_NAME_LENGTH = 128;
@@ -230,7 +241,7 @@ public final class ParachuteTransfer {
         for (Path file : listFolderFiles(dir)) {
             byte[] data = readFileOrNull(file);
             if (data == null) continue;
-            if (data.length > MAX_FILE_BYTES) {
+            if (data.length > maxFileBytes()) {
                 ParachuteMod.LOGGER.warn("[transfer] skip oversized file {} ({} bytes)", file, data.length);
                 continue;
             }
@@ -307,7 +318,7 @@ public final class ParachuteTransfer {
             ParachuteMod.LOGGER.warn("[transfer] rejected illegal path '{}/{}'", folder, file);
             return;
         }
-        if (payload.totalBytes() < 0 || payload.totalBytes() > MAX_FILE_BYTES) {
+        if (payload.totalBytes() < 0 || payload.totalBytes() > maxFileBytes()) {
             ParachuteMod.LOGGER.warn("[transfer] rejected oversized transfer '{}/{}' ({} bytes)",
                     folder, file, payload.totalBytes());
             return;
@@ -349,7 +360,7 @@ public final class ParachuteTransfer {
         }
 
         session.buffer().writeBytes(payload.data());
-        if (session.buffer().size() > MAX_FILE_BYTES) {
+        if (session.buffer().size() > maxFileBytes()) {
             INCOMING.remove(key);
             ParachuteMod.LOGGER.warn("[transfer] aborted oversized transfer '{}/{}'", folder, file);
             return;

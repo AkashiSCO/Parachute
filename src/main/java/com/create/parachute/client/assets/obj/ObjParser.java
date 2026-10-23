@@ -1,5 +1,6 @@
 package com.create.parachute.client.assets.obj;
 
+import com.create.parachute.ParachuteConfig;
 import com.create.parachute.ParachuteMod;
 import org.jetbrains.annotations.Nullable;
 
@@ -49,10 +50,25 @@ import java.util.Set;
  */
 public final class ObjParser {
 
-    /** 单个模型的三角形上限（超过则拒绝加载，避免渲染线程长时间卡死） */
-    public static final int MAX_TRIANGLES = 4_000_000;
-    /** 单个 .obj 文件大小上限 */
-    public static final long MAX_FILE_BYTES = 256L * 1024L * 1024L;
+    /**
+     * 单个 .obj 文件的大小上限（字节），读配置 {@code visual.objMaxFileMB}；{@code 0} = 不限。
+     *
+     * <p>原来这里是写死的 256 MB，现在交给配置 —— 见 {@link ParachuteConfig#OBJ_MAX_FILE_MB}。</p>
+     */
+    private static long maxFileBytes() {
+        int mb = ParachuteConfig.OBJ_MAX_FILE_MB.get();
+        return mb <= 0 ? Long.MAX_VALUE : (long) mb * 1024L * 1024L;
+    }
+
+    /**
+     * 单个模型最多加载的三角形数，读配置 {@code visual.objMaxTriangles}；{@code 0} = 不限。
+     *
+     * <p>原来写死 400 万，见 {@link ParachuteConfig#OBJ_MAX_TRIANGLES}。</p>
+     */
+    private static int maxTriangles() {
+        int n = ParachuteConfig.OBJ_MAX_TRIANGLES.get();
+        return n <= 0 ? Integer.MAX_VALUE : n;
+    }
 
     private ObjParser() {
     }
@@ -173,6 +189,8 @@ public final class ObjParser {
         boolean sawNormalIndex;
         /** 达到上限被截断 */
         boolean truncated;
+        /** 三角形上限（解析开始时从配置读一次，{@code 0} 配置表示不限 → 这里存 Integer.MAX_VALUE） */
+        int maxTriangles = Integer.MAX_VALUE;
 
         public int triangleCount;
         public int droppedFaces;
@@ -209,9 +227,10 @@ public final class ObjParser {
     public static ObjData parse(Path objFile) {
         try {
             long size = Files.size(objFile);
-            if (size > MAX_FILE_BYTES) {
+            long limit = maxFileBytes();
+            if (size > limit) {
                 ParachuteMod.LOGGER.warn("OBJ '{}' is too large ({} bytes > {}), skipped",
-                        objFile.getFileName(), size, MAX_FILE_BYTES);
+                        objFile.getFileName(), size, limit);
                 return null;
             }
         } catch (IOException e) {
@@ -220,6 +239,7 @@ public final class ObjParser {
         }
 
         ObjData d = new ObjData();
+        d.maxTriangles = maxTriangles();
         String object = "";
         String group = "";
         int objectIdx = 0;
@@ -291,7 +311,7 @@ public final class ObjParser {
 
         if (d.truncated) {
             ParachuteMod.LOGGER.warn("OBJ '{}' exceeds {} triangles; the rest was ignored",
-                    objFile.getFileName(), MAX_TRIANGLES);
+                    objFile.getFileName(), d.maxTriangles);
         }
         return d;
     }
@@ -329,7 +349,7 @@ public final class ObjParser {
         if (n > 4) d.ngonFaces++;
 
         for (int i = 1; i + 1 < n; i++) {
-            if (d.triangleCount >= MAX_TRIANGLES) {
+            if (d.triangleCount >= d.maxTriangles) {
                 d.truncated = true;
                 return;
             }

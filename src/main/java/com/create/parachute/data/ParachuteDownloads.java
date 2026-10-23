@@ -163,7 +163,7 @@ public final class ParachuteDownloads {
                 Job job = session.jobs.poll();
                 if (job == null) return true;
                 byte[] data = ParachuteTransfer.readFileOrNull(root.resolve(job.folder()).resolve(job.file()));
-                if (data == null || data.length > ParachuteTransfer.MAX_FILE_BYTES) {
+                if (data == null || data.length > ParachuteTransfer.maxFileBytes()) {
                     ParachuteMod.LOGGER.warn("[download] skip unreadable file {}/{}", job.folder(), job.file());
                     continue;
                 }
