@@ -24,7 +24,8 @@ import java.util.List;
  * 伞包文件夹管理器：管理游戏根目录下的 {@code parachute/} 及其子目录。
  *
  * <p>每个伞文件夹是一把伞，内含 {@code <伞名>.bbmodel}（模型+动画+内嵌贴图）和可选的同目录
- * {@code .png} 贴图。首次加载（文件夹原本不存在）时自动把内置的 5 把伞（大伞/小伞系列）
+ * {@code .png} 贴图；也支持 Blender 工作流（{@code .obj} + {@code .mtl} + 贴图放在
+ * {@code textures/} 等子目录里）。首次加载（文件夹原本不存在）时自动把内置的 5 把伞（大伞/小伞系列）
  * 从模组资源导出到该文件夹。</p>
  *
  * <h2>目录结构</h2>
@@ -59,7 +60,7 @@ public final class ParachuteManager {
      * 模组自带的伞 id（对应 {@code resources/assets/.../models/entity/<id>.bbmodel}）。
      *
      * <p><b>客户端启动时会把这些伞逐个补进 {@code parachute/local/}</b>（缺哪个补哪个；
-     * 文件夹里已经有 .bbmodel 的不会被覆盖，所以玩家改过的照旧）。客户端只能扫磁盘文件夹，
+     * 文件夹里已经有 .bbmodel 或 .obj 的不会被覆盖，所以玩家改过的照旧）。客户端只能扫磁盘文件夹，
      * jar 里的资源不导出就等于"不存在" —— 只导 {@link #DEFAULT_PARACHUTE} 的话，
      * 新装玩家在选择界面里就只能看到蘑菇伞。</p>
      */
@@ -199,11 +200,12 @@ public final class ParachuteManager {
         }
     }
 
-    /** 若目标伞文件夹缺失（或无 .bbmodel）则从内置资源导出 */
+    /** 若目标伞文件夹缺失（或里面没有任何模型文件）则从内置资源导出 */
     private static void exportIfMissing(Path root, String id) {
         Path dir = root.resolve(id);
         try {
-            if (Files.isDirectory(dir) && hasBbmodel(dir)) {
+            // 有 .bbmodel 或 .obj 都算玩家已经在用这把伞，不再覆盖
+            if (Files.isDirectory(dir) && hasModel(dir)) {
                 return;
             }
             Files.createDirectories(dir);
@@ -223,8 +225,28 @@ public final class ParachuteManager {
         }
     }
 
+    /** 该伞文件夹下是否已有 .obj（Blender / DCS 工作流） */
+    public static boolean hasObj(Path dir) {
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir, "*.obj")) {
+            return ds.iterator().hasNext();
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     /**
-     * 扫描 {@code parachute/}（服务端伞库）下所有含 {@code .bbmodel} 的子文件夹，返回伞名列表（已排序）。
+     * 这个文件夹是否装着一把伞：有 {@code .bbmodel}（Blockbench）或 {@code .obj}（Blender / DCS）都算。
+     *
+     * <p>和客户端 {@code client.assets.ParachuteAssets.findModel} 的判定保持一致。服务端伞库列表、
+     * 上传、下载、分发都用它筛伞，所以 OBJ 伞在服务器上也能被识别。</p>
+     */
+    public static boolean hasModel(Path dir) {
+        return hasBbmodel(dir) || hasObj(dir);
+    }
+
+    /**
+     * 扫描 {@code parachute/}（服务端伞库）下所有含 {@code .bbmodel} 或 {@code .obj} 的子文件夹，
+     * 返回伞名列表（已排序）。
      *
      * <p>服务端用它做伞库列表（{@code /parachute list}、download、distribute）；客户端渲染/上传
      * 用的是带伞源扫描的 {@code client.assets.ParachuteAssets}，不再走这里。</p>
@@ -233,12 +255,12 @@ public final class ParachuteManager {
         return listParachuteIds(rootFolder());
     }
 
-    /** 扫描指定伞源根目录下的伞名列表（含 {@code .bbmodel} 的直接子文件夹，已排序） */
+    /** 扫描指定伞源根目录下的伞名列表（含 .bbmodel 或 .obj 的直接子文件夹，已排序） */
     public static List<String> listParachuteIds(Path root) {
         List<String> ids = new ArrayList<>();
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(root)) {
             for (Path p : ds) {
-                if (Files.isDirectory(p) && hasBbmodel(p)) {
+                if (Files.isDirectory(p) && hasModel(p)) {
                     ids.add(p.getFileName().toString());
                 }
             }
