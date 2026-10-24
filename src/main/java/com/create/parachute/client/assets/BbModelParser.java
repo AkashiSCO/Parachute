@@ -354,6 +354,9 @@ public final class BbModelParser {
             } else {
                 built.setRotation(0.0F, 0.0F, (float) Math.PI);
             }
+            // 手工构造的 ModelPart 的 initialPose 是 PartPose.ZERO，动画每帧 resetPose() 会把烘焙好的
+            // 姿态清零（零件全塌到枢轴上）。这里把烘焙结果记成静止姿态。
+            built.setInitialPose(built.storePose());
             return built;
         } catch (Exception e) {
             com.create.parachute.ParachuteMod.LOGGER.warn("Failed to build bbmodel ModelPart: {}", e.toString());
@@ -446,6 +449,7 @@ public final class BbModelParser {
                             cubePart.setRotation((float) Math.toRadians(-rot[0]),
                                     (float) Math.toRadians(-rot[1]), (float) Math.toRadians(rot[2]));
                         }
+                        cubePart.setInitialPose(cubePart.storePose());
                         children.put(uniqueCubeName(elem, cubeIndex++), cubePart);
                     }
                 }
@@ -483,6 +487,7 @@ public final class BbModelParser {
             if (rot != null) {
                 part.setRotation((float) Math.toRadians(-rot[0]), (float) Math.toRadians(-rot[1]), (float) Math.toRadians(rot[2]));
             }
+            part.setInitialPose(part.storePose());
             children.put(name, part);
         }
         return new ModelPart(cubes, children);

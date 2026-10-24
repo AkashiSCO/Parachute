@@ -24,8 +24,8 @@ import java.util.Map;
  *
  * <p>读取 {@code animations[]} 中名为 {@code code_anim} 的动画（缺省取第一个）：</p>
  * <ul>
- *   <li>关键帧数值透传（模型姿态已含 Y 翻转；<b>旋转通道</b>与模型一致做 Y 翻转 (-rx,+ry,-rz)，
- *       与 BlockBench 导出语义一致，否则骨骼反向乱转）</li>
+ *   <li>通道值与原版的"叠加"语义对接：位置/旋转按模型烘焙的绕 Z 180° 共轭取 {@code (-x,-y,+z)}，
+ *       缩放直接传 Blockbench 的乘数（{@code scaleVec} 内部减 1、{@code posVec} 内部翻 Y）</li>
  *   <li>同一骨骼同一通道的多个关键帧合并为一个 {@link AnimationChannel}，并按时间排序</li>
  *   <li>插值映射：linear→LINEAR，step/hold→STEP，catmullrom/bezier→CATMULLROM</li>
  * </ul>
@@ -102,10 +102,14 @@ public final class BbAnimationParser {
                 AnimationChannel.Interpolation interp = interpolation(GsonHelper.getAsString(kf, "interpolation", "linear"));
                 Keyframe keyframe;
                 switch (channel) {
-                    // 位置/缩放：绝对值直通（与原版导出一致，动画目标是"设置"姿态）
-                    case "position" -> keyframe = new Keyframe(time, KeyframeAnimations.posVec(pts[0], pts[1], pts[2]), interp);
-                    // 旋转：(-rx, +ry, -rz)，与模型姿态的 Y 翻转约定一致
-                    case "rotation" -> keyframe = new Keyframe(time, KeyframeAnimations.degreeVec(-pts[0], pts[1], -pts[2]), interp);
+                    // 位置：模型烘焙把所有偏移/旋转都共轭了绕 Z 180°（见 BbModelParser：(-x,-y,+z)），
+                    // 这里要同样共轭。注意 posVec(x,y,z) 内部会自己把 Y 取反（返回 (x,-y,z)），
+                    // 所以只传 -x，Y 原样传进去就被它翻成 -y 了。
+                    case "position" -> keyframe = new Keyframe(time, KeyframeAnimations.posVec(-pts[0], pts[1], pts[2]), interp);
+                    // 旋转：同样是绕 Z 180° 共轭（degreeVec 只把角度转弧度，不翻任何轴）
+                    case "rotation" -> keyframe = new Keyframe(time, KeyframeAnimations.degreeVec(-pts[0], -pts[1], pts[2]), interp);
+                    // 缩放：scaleVec(x,y,z) 内部已经减了 1（返回 (x-1,y-1,z-1)），
+                    // Blockbench 的 m 直接传进来即可（m=1 = 原始大小 → 偏移 0）
                     default -> keyframe = new Keyframe(time, KeyframeAnimations.scaleVec(pts[0], pts[1], pts[2]), interp);
                 }
                 byChannel.computeIfAbsent(channel, c -> new ArrayList<>()).add(keyframe);
