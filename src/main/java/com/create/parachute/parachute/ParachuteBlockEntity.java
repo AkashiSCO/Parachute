@@ -83,16 +83,12 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
 
     /** 每 tick 阻力系数下限（0 表示无阻力） */
     private static final double MIN_K = 0.0D;
-    /** 切伞速度阈值下限（m/s），设为 0 时永远不会因低速切伞 */
+    /** 切伞速度阈值下限（m/s），设为 0 时永远不会因低速切伞。上限见配置 {@code maxDisconnectSpeed} */
     private static final double MIN_DISCONNECT_SPEED = 0.0D;
-    /** 切伞速度阈值上限（m/s） */
-    private static final double MAX_DISCONNECT_SPEED = 5.0D;
     /** 开伞/收伞动画总帧数（同 Minecraft 1 tick = 1 帧，共 1 秒） */
     private static final int OPEN_ANIMATION_TICKS = 20;
-    /** 渲染缩放系数下限（再小基本看不见了） */
+    /** 渲染缩放系数下限（再小基本看不见了）。上限见配置 {@code maxRenderScale} */
     private static final double MIN_RENDER_SCALE = 0.05D;
-    /** 渲染缩放系数上限（再大纯属浪费） */
-    private static final double MAX_RENDER_SCALE = 20.0D;
 
     // ============================================================
     // 逐块可配置参数（通过 GUI 修改，非全局配置）
@@ -598,15 +594,24 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     /** @return 渲染整体缩放系数（相对枢轴点） */
     public float getRenderScale() { return this.renderScale; }
 
-    /** 设置渲染整体缩放系数（钳在 {@link #MIN_RENDER_SCALE}~{@link #MAX_RENDER_SCALE}） */
+    /** 设置渲染整体缩放系数（钳在 {@link #MIN_RENDER_SCALE}~{@link ParachuteConfig#MAX_RENDER_SCALE}，缩放最小值是 0） */
     public void setRenderScale(float scale) {
-        this.renderScale = (float) clamp(scale, MIN_RENDER_SCALE, MAX_RENDER_SCALE);
+        this.renderScale = (float) clamp(scale, MIN_RENDER_SCALE, ParachuteConfig.MAX_RENDER_SCALE.get());
         markDirty();
     }
 
     public void setDragCoefficient(double k) { this.dragCoefficient = clamp(k, MIN_K, ParachuteConfig.MAX_DRAG_COEFFICIENT.get()); markDirty(); }
     public void setRotationalDragCoefficient(double k) { this.rotationalDragCoefficient = clamp(k, MIN_K, ParachuteConfig.MAX_ROTATIONAL_DAMP_COEFFICIENT.get()); markDirty(); }
-    public void setDisconnectSpeedThreshold(double v) { this.disconnectSpeedThreshold = clamp(v, MIN_DISCONNECT_SPEED, MAX_DISCONNECT_SPEED); markDirty(); }
+    public void setDisconnectSpeedThreshold(double v) { this.disconnectSpeedThreshold = clamp(v, MIN_DISCONNECT_SPEED, ParachuteConfig.MAX_DISCONNECT_SPEED.get()); markDirty(); }
+
+    /**
+     * 有符号参数的钳制：{@code |v| <= max}，即允许 {@code [-max, +max]}。
+     * <p>配置上限 {@code <= 0} 表示不限，直接放行。</p>
+     */
+    private static float clampAbs(float v, double max) {
+        if (max <= 0.0D) return v;
+        return (float) clamp(v, -max, max);
+    }
 
     /** 在 GUI 中微调阻力系数（每次 +delta 或 -delta） */
     public void adjustDragCoefficient(double delta) { setDragCoefficient(this.dragCoefficient + delta); }
@@ -651,9 +656,13 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     /** @return 伞面旋转 Z（度） */
     public float getRotZ() { return this.rotZ; }
 
-    /** 设置伞面旋转（度） */
+    /** 设置伞面旋转（度）。上限见配置 {@code maxRotation}（绝对值语义，0 = 不限） */
     public void setRotation(float x, float y, float z) {
-        this.rotX = x; this.rotY = y; this.rotZ = z; markDirty();
+        double max = ParachuteConfig.MAX_ROTATION.get();
+        this.rotX = clampAbs(x, max);
+        this.rotY = clampAbs(y, max);
+        this.rotZ = clampAbs(z, max);
+        markDirty();
     }
 
     /** @return 枢轴偏移 X（格） */
@@ -663,9 +672,13 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     /** @return 枢轴偏移 Z（格） */
     public float getPivotZ() { return this.pivotZ; }
 
-    /** 设置枢轴点偏移（格） */
+    /** 设置枢轴点偏移（格）。上限见配置 {@code maxPivot}（绝对值语义，0 = 不限） */
     public void setPivot(float x, float y, float z) {
-        this.pivotX = x; this.pivotY = y; this.pivotZ = z; markDirty();
+        double max = ParachuteConfig.MAX_PIVOT.get();
+        this.pivotX = clampAbs(x, max);
+        this.pivotY = clampAbs(y, max);
+        this.pivotZ = clampAbs(z, max);
+        markDirty();
     }
 
     /** @return 整体偏移 X（格） */
@@ -675,9 +688,13 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
     /** @return 整体偏移 Z（格） */
     public float getOffZ() { return this.offZ; }
 
-    /** 设置整体偏移（格） */
+    /** 设置整体偏移（格）。上限见配置 {@code maxOffset}（绝对值语义，0 = 不限） */
     public void setOffset(float x, float y, float z) {
-        this.offX = x; this.offY = y; this.offZ = z; markDirty();
+        double max = ParachuteConfig.MAX_OFFSET.get();
+        this.offX = clampAbs(x, max);
+        this.offY = clampAbs(y, max);
+        this.offZ = clampAbs(z, max);
+        markDirty();
     }
 
     /** 设置伞名；空值回退默认（蘑菇伞） */
@@ -876,7 +893,7 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         super.loadAdditional(tag, registries);
         this.dragCoefficient = clamp(tag.getDouble("DragCoefficient"), MIN_K, ParachuteConfig.MAX_DRAG_COEFFICIENT.get());
         this.rotationalDragCoefficient = clamp(tag.getDouble("RotationalDragCoefficient"), MIN_K, ParachuteConfig.MAX_ROTATIONAL_DAMP_COEFFICIENT.get());
-        this.disconnectSpeedThreshold = clamp(tag.getDouble("DisconnectSpeedThreshold"), MIN_DISCONNECT_SPEED, MAX_DISCONNECT_SPEED);
+        this.disconnectSpeedThreshold = clamp(tag.getDouble("DisconnectSpeedThreshold"), MIN_DISCONNECT_SPEED, ParachuteConfig.MAX_DISCONNECT_SPEED.get());
         this.disconnectOnLowSpeed = tag.getBoolean("DisconnectOnLowSpeed");
         this.disconnectOnRedstonePulse = readRedstoneFlag(tag);
         readCommonTag(tag);
@@ -978,7 +995,7 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         if (tag.contains("DragCoefficient")) {
             this.dragCoefficient = clamp(tag.getDouble("DragCoefficient"), MIN_K, ParachuteConfig.MAX_DRAG_COEFFICIENT.get());
             this.rotationalDragCoefficient = clamp(tag.getDouble("RotationalDragCoefficient"), MIN_K, ParachuteConfig.MAX_ROTATIONAL_DAMP_COEFFICIENT.get());
-            this.disconnectSpeedThreshold = clamp(tag.getDouble("DisconnectSpeedThreshold"), MIN_DISCONNECT_SPEED, MAX_DISCONNECT_SPEED);
+            this.disconnectSpeedThreshold = clamp(tag.getDouble("DisconnectSpeedThreshold"), MIN_DISCONNECT_SPEED, ParachuteConfig.MAX_DISCONNECT_SPEED.get());
             this.disconnectOnLowSpeed = tag.getBoolean("DisconnectOnLowSpeed");
             this.disconnectOnRedstonePulse = readRedstoneFlag(tag);
         }
@@ -1177,7 +1194,7 @@ public class ParachuteBlockEntity extends BlockEntity implements BlockEntitySubL
         this.offZ = tag.getFloat("OffZ");
         // 渲染缩放：缺省（老存档/老同步标签）回退 1.0，避免被当成 0 缩到看不见
         this.renderScale = tag.contains("Scale")
-                ? (float) clamp(tag.getFloat("Scale"), MIN_RENDER_SCALE, MAX_RENDER_SCALE)
+                ? (float) clamp(tag.getFloat("Scale"), MIN_RENDER_SCALE, ParachuteConfig.MAX_RENDER_SCALE.get())
                 : 1.0F;
     }
 

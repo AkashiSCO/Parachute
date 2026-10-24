@@ -130,6 +130,21 @@ public final class ParachuteConfig {
     /** 旋转阻尼系数的上限，限制 GUI 中 rotationalDragCoefficient 的最大值 */
     public static final ModConfigSpec.DoubleValue MAX_ROTATIONAL_DAMP_COEFFICIENT;
 
+    /** 切伞速度阈值的上限（m/s），限制 GUI 中 disconnectSpeedThreshold 的最大值 */
+    public static final ModConfigSpec.DoubleValue MAX_DISCONNECT_SPEED;
+
+    /** 伞面旋转的上限（度，绝对值语义：允许 [-max, +max]，0 = 不限） */
+    public static final ModConfigSpec.DoubleValue MAX_ROTATION;
+
+    /** 枢轴偏移的上限（格，绝对值语义：允许 [-max, +max]，0 = 不限） */
+    public static final ModConfigSpec.DoubleValue MAX_PIVOT;
+
+    /** 整体偏移的上限（格，绝对值语义：允许 [-max, +max]，0 = 不限） */
+    public static final ModConfigSpec.DoubleValue MAX_OFFSET;
+
+    /** 渲染缩放的上限（缩放最小值是 0，所以只钳 [0, max]） */
+    public static final ModConfigSpec.DoubleValue MAX_RENDER_SCALE;
+
     // ========== 服务器伞库下发 ==========
 
     /** 是否允许普通玩家自己用 /parachute list|download 拉服务器伞库（关掉就只有 OP 能用） */
@@ -305,6 +320,31 @@ public final class ParachuteConfig {
         MAX_ROTATIONAL_DAMP_COEFFICIENT = b
                 .comment("旋转阻尼系数上限。GUI 中 rotationalDragCoefficient 的最大值")
                 .defineInRange("maxRotationalDampCoefficient", 100_000.0D, 0.1D, 1_000_000.0D);
+
+        MAX_DISCONNECT_SPEED = b
+                .comment("切伞速度阈值上限（m/s）。GUI 中 disconnectSpeedThreshold 的最大值",
+                         "0 = 不限（阈值本身下限是 0，所以这里只需要上限）")
+                .defineInRange("maxDisconnectSpeed", 5.0D, 0.0D, 10_000.0D);
+
+        MAX_ROTATION = b
+                .comment("伞面旋转上限（度）。变换界面里 rotation 的钳制范围是 [-max, +max]（绝对值语义）。",
+                         "0 = 不限（默认，与旧版行为一致）。")
+                .defineInRange("maxRotation", 0.0D, 0.0D, 100_000.0D);
+
+        MAX_PIVOT = b
+                .comment("枢轴偏移上限（格）。变换界面里 pivot 的钳制范围是 [-max, +max]（绝对值语义）。",
+                         "0 = 不限（默认，与旧版行为一致）。")
+                .defineInRange("maxPivot", 0.0D, 0.0D, 100_000.0D);
+
+        MAX_OFFSET = b
+                .comment("整体偏移上限（格）。变换界面里 offset 的钳制范围是 [-max, +max]（绝对值语义）。",
+                         "0 = 不限（默认，与旧版行为一致）。")
+                .defineInRange("maxOffset", 0.0D, 0.0D, 100_000.0D);
+
+        MAX_RENDER_SCALE = b
+                .comment("渲染缩放上限。变换界面里 scale 的钳制范围是 [0, max]（缩放最小值是 0，不能为负）。",
+                         "默认 1000；调小可以让 GUI 里输入不了过大的缩放。")
+                .defineInRange("maxRenderScale", 1000.0D, 0.05D, 100_000.0D);
 
         b.pop();
 
