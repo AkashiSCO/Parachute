@@ -58,9 +58,10 @@ public final class ParachuteManager {
     /**
      * 模组自带的伞 id（对应 {@code resources/assets/.../models/entity/<id>.bbmodel}）。
      *
-     * <p><b>它们只留在 jar 里，不会自动导出到文件夹</b>：只有 {@link #DEFAULT_PARACHUTE}
-     * （蘑菇伞，渲染兜底）会在缺失时补进 {@code parachute/} 与 {@code parachute/local/}。
-     * 这个列表保留下来当"自带伞有哪些"的说明/API，导出逻辑不再使用它。</p>
+     * <p><b>客户端启动时会把这些伞逐个补进 {@code parachute/local/}</b>（缺哪个补哪个；
+     * 文件夹里已经有 .bbmodel 的不会被覆盖，所以玩家改过的照旧）。客户端只能扫磁盘文件夹，
+     * jar 里的资源不导出就等于"不存在" —— 只导 {@link #DEFAULT_PARACHUTE} 的话，
+     * 新装玩家在选择界面里就只能看到蘑菇伞。</p>
      */
     public static final List<String> BUILTIN_IDS = List.of(
             "parachute", "parachute1", "mushroom", "bigparachute", "bigparachute2");
@@ -136,8 +137,8 @@ public final class ParachuteManager {
     /**
      * 两端都会调：确保<b>服务端伞库</b> {@code parachute/} 存在。
      *
-     * <p>只建文件夹结构，<b>不</b>往里面铺任何内置伞 —— 默认伞（蘑菇）由客户端的
-     * {@link #ensureClientFolders()} 直接放进 {@code parachute/local/}。
+     * <p>只建文件夹结构，<b>不</b>往里面铺任何内置伞 —— 内置伞由客户端的
+     * {@link #ensureClientFolders()} 铺进 {@code parachute/local/}。
      * 服务端伞库里有什么，完全由服主决定；{@code /parachute distribute} 也只散它里面有的。</p>
      */
     public static void ensureServerLibrary() {
@@ -146,7 +147,7 @@ public final class ParachuteManager {
 
     /**
      * <b>客户端</b>调用：确保玩家自己的伞文件夹 {@code parachute/local} 存在，
-     * 并把默认伞（蘑菇）直接放进去。
+     * 并把内置伞（{@link #BUILTIN_IDS}，含兜底的蘑菇伞）缺哪个补哪个地铺进去。
      *
      * <p>第一次创建时会先把现有的 {@code parachute/<伞名>} 各复制一份进来（旧版本升级迁移）。
      * 用复制而不是移动：{@code parachute/<伞名>} 在客户端上还是「自己开世界」时的伞库，
@@ -171,8 +172,9 @@ public final class ParachuteManager {
                 }
             }
         }
-        // 默认伞（蘑菇）直接放 local：缺了就补回来。其余内置伞只留在 jar 里，不导出。
-        ensureBuiltins(local, List.of(DEFAULT_PARACHUTE));
+        // 内置伞逐个补齐：客户端只扫磁盘文件夹，jar 里不导出 = 选择界面里根本看不到，
+        // 所以除了兜底的蘑菇伞，另外几把默认伞也要铺进 local（已存在的文件夹不动）。
+        ensureBuiltins(local, BUILTIN_IDS);
     }
 
     /** 把给定的内置伞导出到文件夹（已存在则跳过） */
