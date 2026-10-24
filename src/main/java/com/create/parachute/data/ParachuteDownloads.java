@@ -40,7 +40,7 @@ import java.util.UUID;
 @EventBusSubscriber(modid = ParachuteMod.MOD_ID)
 public final class ParachuteDownloads {
 
-    /** 一个待发文件 */
+    /** 一个待发文件：{@code file} 是伞文件夹内的相对路径（{@code textures/a.png}） */
     private record Job(String folder, String file) {
     }
 
@@ -84,11 +84,13 @@ public final class ParachuteDownloads {
         int chutes = 0;
         for (String folder : folders) {
             if (folder == null || folder.isEmpty()) continue;
-            List<Path> files = ParachuteTransfer.listFolderFiles(root.resolve(folder));
+            Path dir = root.resolve(folder);
+            List<Path> files = ParachuteTransfer.listFolderFiles(dir);
             if (files.isEmpty()) continue;
             chutes++;
             for (Path file : files) {
-                pending.add(new Job(folder, file.getFileName().toString()));
+                // 用相对路径入队：贴图在 textures/ 子目录里，客户端按它还原同样的层级
+                pending.add(new Job(folder, ParachuteTransfer.relativeName(dir, file)));
             }
         }
         if (pending.isEmpty()) return 0;

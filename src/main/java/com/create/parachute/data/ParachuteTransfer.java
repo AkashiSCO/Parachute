@@ -12,7 +12,6 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -22,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 /**
  * 伞文件传输层：服务端 ↔ 客户端之间搬 {@code parachute/<伞名>/<文件>}，以及本端文件夹读写。
@@ -44,7 +44,7 @@ import java.util.function.Consumer;
  * <p>「当前伞源」见 {@link ParachuteScope}。</p>
  *
  * <h2>安全</h2>
- * <p>两端都会校验文件夹名/文件名（不含路径分隔符与 {@code ..}），并在拼接后再次确认目标路径仍在
+ * <p>两端都会校验文件夹名与相对路径（逐段检查、不含 {@code ..}、不绝对路径），并在拼接后再次确认目标路径仍在
  * {@code parachute/} 之内，防止恶意包写到目录外（zip slip / 目录穿越）；服务端方向上还要求发送者是 OP。</p>
  */
 public final class ParachuteTransfer {
@@ -66,6 +66,12 @@ public final class ParachuteTransfer {
 
     private static final int MAX_FOLDER_NAME_LENGTH = 64;
     private static final int MAX_FILE_NAME_LENGTH = 128;
+    /** 相对路径总长上限（{@code textures/xxx.png} 这种，按字符计） */
+    private static final int MAX_REL_PATH_LENGTH = 256;
+    /** 相对路径层数上限（{@code assets/textures/a.png} = 3 层） */
+    private static final int MAX_REL_PATH_DEPTH = 8;
+    /** 单个伞文件夹最多传多少个文件（防止有人往文件夹里塞几万个文件） */
+    private static final int MAX_FILES_PER_FOLDER = 1024;
     /** 同时进行的接收会话上限，防御性上限（正常时同一时刻只有 1~2 个文件在传） */
     private static final int MAX_SESSIONS = 64;
 
@@ -93,9 +99,26 @@ public final class ParachuteTransfer {
         return isSafeName(name, MAX_FOLDER_NAME_LENGTH);
     }
 
-    /** 文件名是否合法 */
+    /** 文件名是否合法（不含分隔符、{@code ..} 等） */
     public static boolean isValidFileName(String name) {
         return isSafeName(name, MAX_FILE_NAME_LENGTH);
+    }
+
+    /**
+     * 伞文件夹内的<b>相对路径</b>是否合法：{@code foo.png}、{@code textures/foo.png}、
+     * {@code assets/textures/foo.png} 都行。
+     *
+     * <p>按 {@code /} 切段后逐段过 {@link #isSafeName}，因此 {@code ..}、绝对路径、盘符、
+     * 反斜杠、控制字符一律拒绝；层数与总长也有上限。</p>
+     */
+    public static boolean isValidRelativePath(String path) {
+        if (path == null || path.isEmpty() || path.length() > MAX_REL_PATH_LENGTH) return false;
+        String[] parts = path.split("/", -1);
+        if (parts.length == 0 || parts.length > MAX_REL_PATH_DEPTH) return false;
+        for (String part : parts) {
+            if (!isSafeName(part, MAX_FILE_NAME_LENGTH)) return false;
+        }
+        return true;
     }
 
     private static boolean isSafeName(String name, int maxLength) {
@@ -115,6 +138,7 @@ public final class ParachuteTransfer {
      * 解析接收目标路径：{@code root/[folder/]file}，并确认结果仍在 {@code root} 之内。
      *
      * @param folder 伞名；空字符串/null 表示直接放在 {@code parachute/} 根下（打包下载用）
+     * @param file   伞文件夹内的相对路径（{@code textures/a.png} 会落到子目录里）
      * @throws IllegalArgumentException 名称非法或路径越界
      */
     public static Path resolveTarget(Path root, String folder, String file) {
@@ -125,8 +149,8 @@ public final class ParachuteTransfer {
             }
             base = base.resolve(folder);
         }
-        if (!isValidFileName(file)) {
-            throw new IllegalArgumentException("illegal file name: " + file);
+        if (!isValidRelativePath(file)) {
+            throw new IllegalArgumentException("illegal file path: " + file);
         }
         Path target = base.resolve(file).normalize();
         if (!target.startsWith(root.normalize()) || target.equals(root.normalize())) {
@@ -165,19 +189,42 @@ public final class ParachuteTransfer {
         return ParachuteManager.listParachuteIds(libraryRoot());
     }
 
-    /** 某个伞文件夹里的常规文件（不递归，按文件名排序） */
+    /**
+     * 某个伞文件夹里的全部常规文件（<b>递归</b>，含 {@code textures/}、{@code assets/textures/}
+     * 这类子目录），按相对路径排序。
+     *
+     * <p>OBJ 工作流的贴图放在子目录里，只发根目录的话对方会缺贴图；上传/下载/分发都走这里，
+     * 所以两边布局保持一致。相对路径不合法（太深、带怪字符）的文件会被跳过。</p>
+     */
     public static List<Path> listFolderFiles(Path folder) {
         List<Path> files = new ArrayList<>();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(folder)) {
-            for (Path p : ds) {
-                if (Files.isRegularFile(p)) {
-                    files.add(p);
+        if (!Files.isDirectory(folder)) return files;
+        try (Stream<Path> walk = Files.walk(folder, MAX_REL_PATH_DEPTH)) {
+            for (Path p : walk.toList()) {
+                if (!Files.isRegularFile(p)) continue;
+                if (!isValidRelativePath(relativeName(folder, p))) continue;
+                if (files.size() >= MAX_FILES_PER_FOLDER) {
+                    ParachuteMod.LOGGER.warn("[transfer] '{}' has more than {} file(s), the rest is ignored",
+                            folder, MAX_FILES_PER_FOLDER);
+                    break;
                 }
+                files.add(p);
             }
         } catch (IOException ignored) {
         }
-        files.sort(Comparator.comparing(p -> p.getFileName().toString()));
+        files.sort(Comparator.comparing(p -> relativeName(folder, p)));
         return files;
+    }
+
+    /**
+     * 文件相对伞文件夹的路径，统一用 {@code /} 分隔（传输与落盘都用它：
+     * {@code foo.png}、{@code textures/foo.png}）。
+     */
+    public static String relativeName(Path folder, Path file) {
+        Path base = folder.normalize();
+        Path f = file.normalize();
+        Path rel = f.startsWith(base) ? base.relativize(f) : f;
+        return rel.toString().replace('\\', '/');
     }
 
     /** 读一个文件的全部字节；失败返回 null（分批下载队列也用它，所以是 public） */
@@ -245,7 +292,7 @@ public final class ParachuteTransfer {
                 ParachuteMod.LOGGER.warn("[transfer] skip oversized file {} ({} bytes)", file, data.length);
                 continue;
             }
-            sendFile(folderName, file.getFileName().toString(), data, PacketDistributor::sendToServer);
+            sendFile(folderName, relativeName(dir, file), data, PacketDistributor::sendToServer);
             count++;
         }
         return count;
@@ -314,7 +361,7 @@ public final class ParachuteTransfer {
         String folder = payload.folder() == null ? "" : payload.folder();
         String file = payload.file();
 
-        if ((!folder.isEmpty() && !isValidFolderName(folder)) || !isValidFileName(file)) {
+        if ((!folder.isEmpty() && !isValidFolderName(folder)) || !isValidRelativePath(file)) {
             ParachuteMod.LOGGER.warn("[transfer] rejected illegal path '{}/{}'", folder, file);
             return;
         }

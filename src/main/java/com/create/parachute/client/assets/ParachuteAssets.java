@@ -510,11 +510,14 @@ public final class ParachuteAssets {
         return null;
     }
 
-    /** 文件夹签名 = 所有文件（bbmodel + png）的最大修改时间；无文件返回 -1 */
+    /**
+     * 文件夹签名 = 文件夹里所有文件（模型 + 贴图，<b>含 {@code textures/} 等子目录</b>）的最大修改时间；
+     * 无文件返回 -1。递归是因为 OBJ 工作流的贴图在子目录里，只算根目录的话改贴图不会热重载。
+     */
     private static long folderSignature(Path dir) {
         long max = -1;
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
-            for (Path p : ds) {
+        try (java.util.stream.Stream<Path> s = Files.walk(dir, 4)) {
+            for (Path p : s.toList()) {
                 if (Files.isRegularFile(p)) {
                     max = Math.max(max, Files.getLastModifiedTime(p).toMillis());
                 }

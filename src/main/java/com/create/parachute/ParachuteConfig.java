@@ -322,8 +322,9 @@ public final class ParachuteConfig {
                 .defineInRange("bytesPerTick", 65_536, 0, 1_048_576);
 
         DOWNLOAD_MAX_PENDING_FILES = b
-                .comment("单个玩家最多排队多少个待发文件，超了就拒绝并要求改用单把下载，防止刷指令撑爆队列")
-                .defineInRange("maxPendingFiles", 512, 1, 8192);
+                .comment("单个玩家最多排队多少个待发文件，超了就拒绝并要求改用单把下载，防止刷指令撑爆队列",
+                        "OBJ 伞的 .obj/.mtl/每张贴图都各算一个文件，默认 2048 够装整个文件夹")
+                .defineInRange("maxPendingFiles", 2048, 1, 8192);
 
         DOWNLOAD_MAX_FILE_MB = b
                 .comment("分发伞模型时单个文件的大小上限，单位 MB，0 = 不限（默认 64）。",
